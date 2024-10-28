@@ -1,0 +1,28 @@
+[package]
+authors = ["Yuxuan Dai <yxdai@smail.nju.edu.cn>"]
+description = "An MIR to RPIL translator."
+license = "MIT OR Apache-2.0"
+name = "mir2rpil"
+repository = "https://github.com/yxdai-nju/mir2rpil"
+version = "0.1.0"
+default-run = "translate"
+edition = "2021"
+
+[lib]
+test = true
+doctest = false
+
+[[bin]]
+name = "translate"
+test = false
+doctest = false
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+serde_json = "1"
+
+[package.metadata.rust-analyzer]
+# This crate uses #[feature(rustc_private)].
+# See https://github.com/rust-analyzer/rust-analyzer/pull/7891
+rustc_private = true
