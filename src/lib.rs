@@ -9,7 +9,6 @@ extern crate rustc_session;
 
 mod context;
 pub mod debug;
-mod mapping;
 mod path;
 mod rpil;
 mod translate;

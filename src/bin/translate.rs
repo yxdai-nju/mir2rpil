@@ -3,6 +3,7 @@
 extern crate rustc_driver;
 extern crate rustc_hir;
 extern crate rustc_interface;
+extern crate rustc_middle;
 extern crate rustc_session;
 
 use rustc_driver::Compilation;
@@ -21,43 +22,46 @@ impl rustc_driver::Callbacks for Mir2rpilCompilerCalls {
     fn after_analysis<'tcx>(
         &mut self,
         _: &rustc_interface::interface::Compiler,
-        queries: &'tcx rustc_interface::Queries<'tcx>,
+        tcx: rustc_middle::ty::TyCtxt<'tcx>,
     ) -> Compilation {
         mir2rpil::debug::prepare_func_mir_log_dir();
 
-        queries.global_ctxt().unwrap().enter(|tcx| {
-            if tcx.sess.dcx().has_errors_or_delayed_bugs().is_some() {
-                tcx.dcx()
-                    .fatal("mir2rpil cannot be run on programs that fail compilation");
-            }
+        if tcx.sess.dcx().has_errors_or_delayed_bugs().is_some() {
+            tcx.dcx()
+                .fatal("mir2rpil cannot be run on programs that fail compilation");
+        }
 
-            let mut pub_funcs = vec![];
-            let items = tcx.hir_crate_items(());
-            let free_items_owner_id = items.free_items().map(|id| id.owner_id);
-            let impl_items_owner_id = items.impl_items().map(|id| id.owner_id);
-            let func_ids = free_items_owner_id
-                .chain(impl_items_owner_id)
-                .map(|id| id.to_def_id());
+        let mut pub_funcs = vec![];
+        let items = tcx.hir_crate_items(());
+        let free_items_owner_id = items.free_items().map(|id| id.owner_id);
+        let impl_items_owner_id = items.impl_items().map(|id| id.owner_id);
+        let func_ids = free_items_owner_id
+            .chain(impl_items_owner_id)
+            .map(|id| id.to_def_id());
 
-            for func_id in func_ids {
-                if let hir::def::DefKind::Fn | hir::def::DefKind::AssocFn = tcx.def_kind(func_id) {
+        for func_id in func_ids {
+            match tcx.def_kind(func_id) {
+                hir::def::DefKind::Fn | hir::def::DefKind::AssocFn => {
                     if tcx.visibility(func_id).is_public() {
                         pub_funcs.push(func_id);
                     }
                 }
+                _ => {}
             }
+        }
 
-            for pub_func in pub_funcs {
-                let rpil_insts_variants = mir2rpil::translate_function_def(tcx, pub_func);
-                assert!(!rpil_insts_variants.is_empty());
-                for (variant_idx, rpil_insts) in rpil_insts_variants.iter().enumerate() {
-                    println!("Variant {}:", variant_idx + 1);
-                    mir2rpil::debug::print_func_rpil_insts(tcx, pub_func, rpil_insts);
-                }
+        println!("{} public functions in total", pub_funcs.len());
+        println!("Public Functions: {:#?}", pub_funcs);
+        for pub_func in pub_funcs {
+            let rpil_insts_variants = mir2rpil::translate_function_def(tcx, pub_func);
+            assert!(!rpil_insts_variants.is_empty());
+            for (variant_idx, rpil_insts) in rpil_insts_variants.iter().enumerate() {
+                println!("Variant {}:", variant_idx + 1);
+                mir2rpil::debug::print_func_rpil_insts(tcx, pub_func, rpil_insts);
             }
+        }
 
-            tcx.dcx().abort_if_errors();
-        });
+        tcx.dcx().abort_if_errors();
 
         Compilation::Stop
     }

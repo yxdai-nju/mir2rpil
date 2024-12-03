@@ -1,6 +1,7 @@
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 
+use super::context::{TranslationCtxt, TranslationCtxtWithTcx};
 use super::rpil::RpilInst;
 
 pub fn prepare_func_mir_log_dir() {
@@ -58,4 +59,9 @@ pub fn print_func_rpil_insts<'tcx>(tcx: TyCtxt<'tcx>, func_id: DefId, rpil_insts
     } else {
         println!("    (empty)");
     }
+}
+
+pub fn log_translation_context(tcx: TyCtxt<'_>, trcx: &TranslationCtxt) {
+    let trcx_with_tcx = TranslationCtxtWithTcx { trcx, tcx };
+    println!("{:?}", trcx_with_tcx);
 }

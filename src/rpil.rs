@@ -6,28 +6,38 @@ use std::mem::discriminant;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum LowRpilOp {
-    Var { depth: usize, index: usize },
-    Place { base: Box<LowRpilOp>, place_desc: PlaceDesc },
-    Closure { def_id: DefId },
+    Local {
+        index: usize,
+    },
+    UpLocal {
+        depth: usize,
+        index: usize,
+    },
+    Place {
+        base: Box<LowRpilOp>,
+        place_desc: PlaceDesc,
+    },
+    Closure {
+        def_id: DefId,
+    },
     Ref(Box<LowRpilOp>),
-    MutRef(Box<LowRpilOp>),
     Deref(Box<LowRpilOp>),
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum PlaceDesc {
+    V(usize),
     P(usize),
     PExt,
-    VP(usize, usize),
 }
 
 impl fmt::Debug for PlaceDesc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use PlaceDesc::*;
         match self {
+            V(v) => write!(f, "v{}", v),
             P(p) => write!(f, "p{}", p),
             PExt => write!(f, "ext"),
-            VP(v, p) => write!(f, "v{}p{}", v, p),
         }
     }
 }
@@ -37,73 +47,97 @@ impl LowRpilOp {
         use LowRpilOp::*;
         match self {
             Closure { def_id } => Some(*def_id),
-            Ref(inner_op) | MutRef(inner_op) => inner_op.assume_closure(),
+            Ref(inner_op) => inner_op.assume_closure(),
             _ => None,
         }
     }
 
-    pub fn depth(&self) -> usize {
-        use LowRpilOp::*;
-        match self {
-            Var { depth, .. } => *depth,
-            Place { base: op, .. } | Ref(op) | MutRef(op) | Deref(op) => op.depth(),
-            Closure { .. } => 0,
-        }
-    }
+    // pub fn depth(&self) -> usize {
+    //     use LowRpilOp::*;
+    //     match self {
+    //         Local { depth, .. } => *depth,
+    //         Place { base: op, .. } | Ref(op) | Deref(op) => op.depth(),
+    //         Closure { .. } => 0,
+    //     }
+    // }
 
-    pub fn origin_var_index(&self) -> Option<usize> {
-        use LowRpilOp::*;
-        match self.origin() {
-            Var { index, .. } => Some(index),
-            _ => None,
-        }
-    }
+    // pub fn origin_var_index(&self) -> Option<usize> {
+    //     use LowRpilOp::*;
+    //     match self.origin() {
+    //         UpLocal { index, .. } => Some(index),
+    //         _ => None,
+    //     }
+    // }
 
-    fn origin(&self) -> LowRpilOp {
-        use LowRpilOp::*;
-        match self {
-            Var { .. } | Closure { .. } => self.clone(),
-            Place { base, .. } => base.origin(),
-            Ref(op) | MutRef(op) | Deref(op) => op.origin(),
-        }
-    }
+    // fn origin(&self) -> LowRpilOp {
+    //     use LowRpilOp::*;
+    //     match self {
+    //         Local { .. } => unreachable!(),
+    //         UpLocal { .. } | Closure { .. } => self.clone(),
+    //         Place { base, .. } => base.origin(),
+    //         Ref(op) | Deref(op) => op.origin(),
+    //     }
+    // }
 
-    pub fn replace_origin(&self, from: &LowRpilOp, to: &LowRpilOp) -> Option<LowRpilOp> {
-        use LowRpilOp::*;
-        if self == from {
-            return Some(to.clone());
-        }
-        match self {
-            Var { .. } | Closure { .. } => None,
-            Place { base, place_desc } =>
-                base.replace_origin(from, to).map(|replaced_base| {
-                    Place { base: Box::new(replaced_base), place_desc: place_desc.clone() }
-                }),
-            Ref(op) => op.replace_origin(from, to).map(|replaced_op| Ref(Box::new(replaced_op))),
-            MutRef(op) =>
-                op.replace_origin(from, to).map(|replaced_op| MutRef(Box::new(replaced_op))),
-            Deref(op) =>
-                op.replace_origin(from, to).map(|replaced_op| Deref(Box::new(replaced_op))),
-        }
-    }
+    // pub fn replace_origin(&self, from: &LowRpilOp, to: &LowRpilOp) -> Option<LowRpilOp> {
+    //     use LowRpilOp::*;
+    //     if self == from {
+    //         return Some(to.clone());
+    //     }
+    //     match self {
+    //         Local { .. } | Closure { .. } => None,
+    //         Place { base, place_desc } => {
+    //             base.replace_origin(from, to).map(|replaced_base| Place {
+    //                 base: Box::new(replaced_base),
+    //                 place_desc: place_desc.clone(),
+    //             })
+    //         }
+    //         Ref(op) => op
+    //             .replace_origin(from, to)
+    //             .map(|replaced_op| Ref(Box::new(replaced_op))),
+    //         Deref(op) => op
+    //             .replace_origin(from, to)
+    //             .map(|replaced_op| Ref(Box::new(replaced_op))),
+    //     }
+    // }
 }
 
 impl fmt::Debug for LowRpilOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use LowRpilOp::*;
         match self {
-            Var { depth, index } => write!(f, "{}_{}", depth, index),
+            Local { index } => write!(f, "_{}", index),
+            UpLocal { depth, index } => write!(f, "{}_{}", depth, index),
             Place { base, place_desc } => write!(f, "{:?}.{:?}", base, place_desc),
             Closure { def_id } => write!(f, "{{closure:{}}}", def_id.index.as_u32()),
             Ref(op) => write!(f, "& {:?}", op),
-            MutRef(op) => write!(f, "&mut {:?}", op),
-            Deref(op) => write!(f, "({:?})*", op),
+            Deref(op) => write!(f, "(*{:?})", op),
         }
     }
 }
 
 pub enum LowRpilInst {
-    Assign { lhs: LowRpilOp, rhs: LowRpilOp, moves: bool },
+    Assign {
+        lhs: LowRpilOp,
+        rhs: LowRpilOp,
+    },
+    CallFunc {
+        def_id: DefId,
+        ret: LowRpilOp,
+        arg_ops: Vec<LowRpilOp>,
+    },
+    CallClosure {
+        closure: LowRpilOp,
+        ret: LowRpilOp,
+        args_op: LowRpilOp,
+    },
+    Pin(LowRpilOp),
+    Move(LowRpilOp),
+    Forget(LowRpilOp),
+    EnterBasicBlock {
+        bb: mir::BasicBlock,
+    },
+    LeaveBasicBlock,
     Return,
 }
 
@@ -111,77 +145,111 @@ impl fmt::Debug for LowRpilInst {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use LowRpilInst::*;
         match self {
-            Assign { lhs, rhs, moves } =>
-                if *moves {
-                    write!(f, "{:?} = move {:?};", lhs, rhs)
-                } else {
-                    write!(f, "{:?} = {:?};", lhs, rhs)
-                },
+            Assign { lhs, rhs } => {
+                write!(f, "{:?} = {:?};", lhs, rhs)
+            }
+            CallFunc {
+                def_id,
+                ret,
+                arg_ops,
+            } => {
+                let (func_crt, func_idx) = (def_id.krate.as_u32(), def_id.index.as_u32());
+                write!(f, "{:?} = <{}:{}>{:?};", ret, func_crt, func_idx, arg_ops)
+            }
+            CallClosure {
+                closure,
+                ret,
+                args_op,
+            } => {
+                write!(f, "{:?} = Call({:?}, {:?});", ret, closure, args_op)
+            }
+            Pin(op) => write!(f, "pin {:?};", op),
+            Move(op) => write!(f, "move {:?};", op),
+            Forget(op) => write!(f, "forget {:?};", op),
+            EnterBasicBlock { bb } => write!(f, "enter bb{};", bb.as_usize()),
+            LeaveBasicBlock => write!(f, "leave;"),
             Return => write!(f, "return;"),
         }
     }
 }
 
 impl LowRpilOp {
-    pub fn from_mir_place<'tcx>(place: &mir::Place<'tcx>, depth: usize) -> Self {
-        let projection = project_rpil_place(place, depth);
-        if place.projection.len() > 0 {
-            println!("[Projection] {:?}, {:?}", place.local, place.projection);
-            println!("[Projection Result] {:?}", projection);
+    pub fn local_with_depth(op: LowRpilOp, depth: usize) -> LowRpilOp {
+        match op {
+            LowRpilOp::Local { index } => LowRpilOp::UpLocal { depth, index },
+            _ => unreachable!(),
         }
+    }
+
+    pub fn from_mir_place<'tcx>(place: &mir::Place<'tcx>) -> Self {
+        let projection = project_rpil_place(place, place.projection.len());
+        // if place.projection.len() > 0 {
+        //     println!("[Projection] {:?}, {:?}", place.local, place.projection);
+        //     println!("[Projection Result] {:?}", projection);
+        // }
         projection
     }
 }
 
-#[inline(always)]
-fn project_rpil_place<'tcx>(place: &mir::Place<'tcx>, depth: usize) -> LowRpilOp {
-    project_rpil_place_(place, place.projection.len(), depth)
-}
-
-fn project_rpil_place_<'tcx>(place: &mir::Place<'tcx>, idx: usize, depth: usize) -> LowRpilOp {
+fn project_rpil_place<'tcx>(place: &mir::Place<'tcx>, idx: usize) -> LowRpilOp {
     if idx == 0 {
-        return LowRpilOp::Var { depth, index: place.local.as_usize() };
+        return LowRpilOp::Local {
+            index: place.local.as_usize(),
+        };
     }
     let rplace = &place.projection[idx - 1];
     match rplace {
-        mir::ProjectionElem::Field(ridx, _) =>
-            LowRpilOp::Place {
-                base: Box::new(project_rpil_place_(place, idx - 1, depth)),
-                place_desc: PlaceDesc::P(ridx.as_usize()),
-            },
-        mir::ProjectionElem::Deref =>
-            LowRpilOp::Deref(Box::new(project_rpil_place_(place, idx - 1, depth))),
-        mir::ProjectionElem::Downcast(_, variant_idx) => {
-            let next_projection = project_rpil_place_(place, idx - 1, depth);
-            match next_projection {
-                LowRpilOp::Place { base, place_desc } => {
-                    let place_index = match place_desc {
-                        PlaceDesc::P(place_index) => place_index,
-                        _ => unreachable!(),
-                    };
-                    LowRpilOp::Place {
-                        base,
-                        place_desc: PlaceDesc::VP(variant_idx.as_usize(), place_index),
-                    }
-                }
-                _ => unreachable!(),
-            }
+        mir::ProjectionElem::Field(ridx, _) => LowRpilOp::Place {
+            base: Box::new(project_rpil_place(place, idx - 1)),
+            place_desc: PlaceDesc::P(ridx.as_usize()),
+        },
+        mir::ProjectionElem::Downcast(_, variant_idx) => LowRpilOp::Place {
+            base: Box::new(project_rpil_place(place, idx - 1)),
+            place_desc: PlaceDesc::V(variant_idx.as_usize()),
+        },
+        mir::ProjectionElem::Deref => {
+            LowRpilOp::Deref(Box::new(project_rpil_place(place, idx - 1)))
         }
         _ => {
-            let x = discriminant(rplace);
-            println!("[ProjectionElem-{:?}] Unknown `{:?}`", x, rplace);
+            println!(
+                "[ProjectionElem-{:?}] Unknown `{:?}`",
+                discriminant(rplace),
+                rplace
+            );
             unimplemented!()
         }
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum RpilOp {
+    Local {
+        index: usize,
+    },
+    Place {
+        base: Box<RpilOp>,
+        place_desc: PlaceDesc,
+    },
+    Deref(Box<RpilOp>),
+}
+
+impl fmt::Debug for RpilOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use RpilOp::*;
+        match self {
+            Local { index } => write!(f, "_{}", index),
+            Place { base, place_desc } => write!(f, "{:?}.{:?}", base, place_desc),
+            Deref(op) => write!(f, "(*{:?})", op),
+        }
+    }
+}
+
 pub enum RpilInst {
-    Bind(LowRpilOp, LowRpilOp),
-    Borrow(LowRpilOp, LowRpilOp),
-    BorrowMut(LowRpilOp, LowRpilOp),
-    Move(LowRpilOp),
-    DerefMove(LowRpilOp),
-    DerefPin(LowRpilOp),
+    Bind(RpilOp, RpilOp),
+    Borrow(RpilOp, RpilOp),
+    Pin(RpilOp),
+    Move(RpilOp),
+    Forget(RpilOp),
 }
 
 impl fmt::Debug for RpilInst {
@@ -190,10 +258,9 @@ impl fmt::Debug for RpilInst {
         match self {
             Bind(op1, op2) => write!(f, "BIND {:?}, {:?}", op1, op2),
             Borrow(op1, op2) => write!(f, "BORROW {:?}, {:?}", op1, op2),
-            BorrowMut(op1, op2) => write!(f, "BORROW-MUT {:?}, {:?}", op1, op2),
+            Pin(op) => write!(f, "PIN {:?}", op),
             Move(op) => write!(f, "MOVE {:?}", op),
-            DerefMove(op) => write!(f, "DEREF-MOVE {:?}", op),
-            DerefPin(op) => write!(f, "DEREF-PIN {:?}", op),
+            Forget(op) => write!(f, "FORGET {:?}", op),
         }
     }
 }
