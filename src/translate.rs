@@ -24,12 +24,15 @@ pub fn translate_function_def(tcx: TyCtxt<'_>, func_def_id: DefId) -> Vec<Vec<Rp
         "===== Translating function '{}' {}:{} =====",
         func_name, func_crt, func_idx
     );
-    let trcx = TranslationCtxt::from_function_def(func_def_id);
+    let trcx = TranslationCtxt::from_function_def_id(func_def_id);
     let func_body = tcx.optimized_mir(func_def_id);
     let bb0 = func_body.basic_blocks.start_node();
     let trcx_variants = translate_basic_block(tcx, trcx, func_body, bb0);
 
-    vec![vec![]]
+    trcx_variants
+        .into_iter()
+        .map(|trcx| trcx.into_rpil_insts(func_argc))
+        .collect()
 }
 
 fn translate_basic_block<'tcx>(
@@ -38,9 +41,7 @@ fn translate_basic_block<'tcx>(
     func_body: &mir::Body<'tcx>,
     bb: mir::BasicBlock,
 ) -> Vec<TranslationCtxt> {
-    if bb != func_body.basic_blocks.start_node() {
-        println!("-----");
-    }
+    println!("----- {}", trcx.variant_string());
     trcx.eval(LowRpilInst::EnterBasicBlock { bb });
     debug::log_translation_context(tcx, &trcx);
 
@@ -57,12 +58,22 @@ fn translate_basic_block<'tcx>(
             trcx_variants = trcx_variants
                 .into_iter()
                 .flat_map(|trcx| {
-                    next_bbs.iter().copied().flat_map(move |bb| {
-                        if trcx.is_basic_block_visited(bb) {
-                            return vec![];
-                        }
-                        translate_basic_block(tcx, trcx.clone(), func_body, bb)
-                    })
+                    let next_unvisited_bbs: Vec<_> = next_bbs
+                        .iter()
+                        .copied()
+                        .filter(|bb| !trcx.is_basic_block_visited(*bb))
+                        .collect();
+                    let unvisited_bb_count = next_unvisited_bbs.len();
+                    next_unvisited_bbs
+                        .into_iter()
+                        .enumerate()
+                        .flat_map(move |(variant_idx, bb)| {
+                            let mut trcx_variant = trcx.clone();
+                            if unvisited_bb_count > 1 {
+                                trcx_variant.mark_variant(variant_idx);
+                            }
+                            translate_basic_block(tcx, trcx_variant, func_body, bb)
+                        })
                 })
                 .collect();
         }

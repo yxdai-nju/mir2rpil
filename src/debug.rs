@@ -24,7 +24,7 @@ pub fn prepare_func_mir_log_dir() {
     }
 }
 
-pub fn log_func_mir<'tcx>(tcx: TyCtxt<'tcx>, func_id: DefId) {
+pub fn log_func_mir(tcx: TyCtxt<'_>, func_id: DefId) {
     use std::fs::File;
     use std::io::Write;
     use std::path::PathBuf;
@@ -48,7 +48,7 @@ pub fn log_func_mir<'tcx>(tcx: TyCtxt<'tcx>, func_id: DefId) {
         .unwrap_or_else(|_| panic!("Failed to write to `{}`", log_path.display()));
 }
 
-pub fn print_func_rpil_insts<'tcx>(tcx: TyCtxt<'tcx>, func_id: DefId, rpil_insts: &Vec<RpilInst>) {
+pub fn print_func_rpil_insts(tcx: TyCtxt<'_>, func_id: DefId, rpil_insts: &Vec<RpilInst>) {
     let fn_name = tcx.def_path_str(func_id);
     let fn_id = func_id.index.as_u32();
     println!("[RPIL] `{}` {}:", fn_name, fn_id);

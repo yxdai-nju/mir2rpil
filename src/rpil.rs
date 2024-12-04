@@ -60,6 +60,15 @@ impl LowRpilOp {
             LowRpilOp::Closure { .. } => 0,
         }
     }
+
+    pub fn origin_index(&self) -> Option<usize> {
+        match self {
+            LowRpilOp::Local { .. } | LowRpilOp::Closure { .. } => None,
+            LowRpilOp::UpLocal { index, .. } => Some(*index),
+            LowRpilOp::Place { base, .. } => base.origin_index(),
+            LowRpilOp::Ref(op) | LowRpilOp::Deref(op) => op.origin_index(),
+        }
+    }
 }
 
 impl fmt::Debug for LowRpilOp {
@@ -161,16 +170,11 @@ impl LowRpilOp {
     }
 
     pub fn from_mir_place(place: &mir::Place<'_>) -> Self {
-        let projection = project_rpil_place(place, place.projection.len());
-        // if place.projection.len() > 0 {
-        //     println!("[Projection] {:?}, {:?}", place.local, place.projection);
-        //     println!("[Projection Result] {:?}", projection);
-        // }
-        projection
+        project_rpil_place(place, place.projection.len())
     }
 }
 
-fn project_rpil_place<'tcx>(place: &mir::Place<'tcx>, idx: usize) -> LowRpilOp {
+fn project_rpil_place(place: &mir::Place<'_>, idx: usize) -> LowRpilOp {
     if idx == 0 {
         return LowRpilOp::Local {
             index: place.local.as_usize(),
@@ -212,6 +216,22 @@ pub enum RpilOp {
     Deref(Box<RpilOp>),
 }
 
+impl RpilOp {
+    pub fn from_low_rpil(op: LowRpilOp) -> RpilOp {
+        match op {
+            LowRpilOp::Local { .. } | LowRpilOp::Closure { .. } | LowRpilOp::Ref(_) => {
+                unreachable!()
+            }
+            LowRpilOp::UpLocal { index, .. } => RpilOp::Local { index },
+            LowRpilOp::Place { base, place_desc } => RpilOp::Place {
+                base: Box::new(RpilOp::from_low_rpil(*base)),
+                place_desc: place_desc.clone(),
+            },
+            LowRpilOp::Deref(inner_op) => RpilOp::Deref(Box::new(RpilOp::from_low_rpil(*inner_op))),
+        }
+    }
+}
+
 impl fmt::Debug for RpilOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -228,6 +248,14 @@ pub enum RpilInst {
     Pin(RpilOp),
     Move(RpilOp),
     Forget(RpilOp),
+}
+
+impl RpilInst {
+    pub fn from_low_rpil_assignment(low_lhs: LowRpilOp, low_rhs: LowRpilOp) -> RpilInst {
+        let lhs = RpilOp::from_low_rpil(low_lhs);
+        let rhs = RpilOp::from_low_rpil(low_rhs);
+        RpilInst::Bind(lhs, rhs)
+    }
 }
 
 impl fmt::Debug for RpilInst {

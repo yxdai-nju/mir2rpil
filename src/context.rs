@@ -6,6 +6,7 @@ use rustc_middle::ty::TyCtxt;
 use std::fmt;
 
 use crate::path::ExecutionPathWithTcx;
+use crate::rpil::RpilInst;
 
 use super::path::ExecutionPath;
 use super::rpil::{LowRpilInst, LowRpilOp, PlaceDesc};
@@ -23,10 +24,11 @@ pub struct TranslationCtxt {
     mapping: FxHashMap<LowRpilOp, (LowRpilOp, usize)>,
     status_changes: Vec<(LowRpilOp, StatusChange, usize)>,
     serial: usize,
+    variant: Vec<usize>,
 }
 
 impl TranslationCtxt {
-    pub fn from_function_def(func_def_id: DefId) -> Self {
+    pub fn from_function_def_id(func_def_id: DefId) -> Self {
         let mut execution_path = ExecutionPath::new();
         execution_path.push_function(func_def_id);
         Self {
@@ -34,11 +36,15 @@ impl TranslationCtxt {
             mapping: FxHashMap::default(),
             status_changes: vec![],
             serial: 0,
+            variant: vec![],
         }
     }
 
     pub fn eval(&mut self, inst: LowRpilInst) {
-        println!("[Low RPIL] {:?}", inst);
+        if let LowRpilInst::Return | LowRpilInst::LeaveBasicBlock = inst {
+        } else {
+            println!("[Low RPIL] {:?}", inst);
+        }
         match inst {
             LowRpilInst::CallFunc {
                 def_id: func_def_id,
@@ -74,19 +80,56 @@ impl TranslationCtxt {
                 self.execution_path.pop_basic_block();
             }
             LowRpilInst::Return => {
-                let depth = self.execution_path.stack_depth();
-                let mut to_remove = vec![];
-                for (key, (val, _serial)) in self.mapping.iter() {
-                    if key.depth() >= depth || val.depth() >= depth {
-                        to_remove.push(key.clone());
-                    }
-                }
-                for key in to_remove {
-                    self.mapping.remove(&key);
+                let max_depth = self.execution_path.stack_depth();
+                if max_depth > 1 {
+                    self.remove_over_depth_mapping(max_depth);
                 }
                 self.execution_path.pop_function();
             }
         }
+    }
+
+    #[inline(always)]
+    pub fn is_basic_block_visited(&self, bb: mir::BasicBlock) -> bool {
+        self.execution_path.is_basic_block_visited(bb)
+    }
+
+    #[inline(always)]
+    pub fn stack_top_function_def_id(&self) -> DefId {
+        self.execution_path.stack_top_func_def_id()
+    }
+
+    #[inline(always)]
+    pub fn mark_variant(&mut self, variant_idx: usize) {
+        self.variant.push(variant_idx);
+    }
+
+    pub fn variant_string(&self) -> String {
+        self.variant
+            .iter()
+            .map(|idx| idx.to_string())
+            .collect::<String>()
+    }
+
+    pub fn into_rpil_insts(self, func_argc: usize) -> Vec<RpilInst> {
+        let assignments = self
+            .mapping
+            .into_iter()
+            .filter(|(key, (val, _))| {
+                matches!(
+                    (key.origin_index(), val.origin_index()),
+                    (Some(key_index), Some(val_index))
+                        if key_index <= func_argc && val_index <= func_argc
+                )
+            })
+            .map(|(key, (val, serial))| {
+                let inst = RpilInst::from_low_rpil_assignment(key, val);
+                (inst, serial)
+            })
+            .collect::<Vec<_>>();
+
+        println!("{:?}", assignments);
+        vec![]
     }
 
     fn handle_function_call(
@@ -169,19 +212,29 @@ impl TranslationCtxt {
         self.execution_path.push_function(func_def_id);
     }
 
-    #[inline(always)]
-    pub fn is_basic_block_visited(&self, bb: mir::BasicBlock) -> bool {
-        self.execution_path.is_basic_block_visited(bb)
-    }
-
-    #[inline(always)]
-    pub fn stack_top_function_def_id(&self) -> DefId {
-        self.execution_path.stack_top_func_def_id()
-    }
-
     fn insert_mapping(&mut self, key: LowRpilOp, value: LowRpilOp) {
         self.mapping.insert(key, (value, self.serial));
         self.serial += 1;
+    }
+
+    fn remove_over_depth_mapping(&mut self, max_depth: usize) {
+        let mut to_remove = vec![];
+        for (key, (val, _serial)) in self.mapping.iter() {
+            if key.depth() >= max_depth || val.depth() >= max_depth {
+                to_remove.push(key.clone());
+            }
+        }
+        for key in to_remove {
+            self.mapping.remove(&key);
+        }
+    }
+
+    fn mapped_rpil_op(&self, op: &LowRpilOp) -> LowRpilOp {
+        if let Some((mapped_op, _serial)) = self.mapping.get(op) {
+            self.mapped_rpil_op(mapped_op)
+        } else {
+            op.clone()
+        }
     }
 
     fn reduced_rpil_op(&self, op: &LowRpilOp) -> LowRpilOp {
@@ -199,14 +252,6 @@ impl TranslationCtxt {
                 _ => panic!("Failed to deref LowRpilOp '{:?}'", inner_op),
             },
         })
-    }
-
-    fn mapped_rpil_op(&self, op: &LowRpilOp) -> LowRpilOp {
-        if let Some((mapped_op, _serial)) = self.mapping.get(op) {
-            self.mapped_rpil_op(mapped_op)
-        } else {
-            op.clone()
-        }
     }
 }
 
