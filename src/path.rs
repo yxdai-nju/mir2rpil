@@ -21,27 +21,33 @@ impl ExecutionPath {
         }
     }
 
+    #[inline(always)]
     pub fn stack_depth(&self) -> usize {
         self.call_stack.len()
     }
 
+    #[inline(always)]
+    pub fn stack_top_func_def_id(&self) -> DefId {
+        *self.call_stack.last().unwrap()
+    }
+
+    #[inline(always)]
     pub fn push_function(&mut self, func_def_id: DefId) {
         self.call_stack.push(func_def_id);
     }
 
+    #[inline(always)]
     pub fn pop_function(&mut self) {
         self.call_stack.pop();
     }
 
     pub fn is_basic_block_visited(&self, bb: mir::BasicBlock) -> bool {
-        let stack_top_func_idx = *self.call_stack.last().unwrap();
-        let waypoint = (stack_top_func_idx, bb.as_usize());
+        let waypoint = (self.stack_top_func_def_id(), bb.as_usize());
         self.visited_bbs.contains(&waypoint)
     }
 
     pub fn push_basic_block(&mut self, bb: mir::BasicBlock) {
-        let stack_top_func_idx = *self.call_stack.last().unwrap();
-        let waypoint = (stack_top_func_idx, bb.as_usize());
+        let waypoint = (self.stack_top_func_def_id(), bb.as_usize());
         self.bb_trace.push(waypoint);
         self.visited_bbs.insert(waypoint);
     }

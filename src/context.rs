@@ -8,7 +8,7 @@ use std::fmt;
 use crate::path::ExecutionPathWithTcx;
 
 use super::path::ExecutionPath;
-use super::rpil::{LowRpilInst, LowRpilOp};
+use super::rpil::{LowRpilInst, LowRpilOp, PlaceDesc};
 
 #[derive(Debug, Clone)]
 enum StatusChange {
@@ -45,37 +45,25 @@ impl TranslationCtxt {
                 ret: ret_local_op,
                 arg_ops,
             } => {
-                let depth = self.execution_path.stack_depth();
-
-                // Insert a mapping for the return place
-                let sub_ret_op = LowRpilOp::UpLocal {
-                    depth: depth + 1,
-                    index: 0,
-                };
-                let ret_op = LowRpilOp::local_with_depth(ret_local_op, depth);
-                self.insert_mapping(sub_ret_op, ret_op);
-
-                // Insert mappings for argument places
-                for (idx, arg_local_op) in arg_ops.into_iter().enumerate() {
-                    let sub_arg_op = LowRpilOp::UpLocal {
-                        depth: depth + 1,
-                        index: idx + 1,
-                    };
-                    let arg_op = LowRpilOp::local_with_depth(arg_local_op, depth);
-                    self.insert_mapping(sub_arg_op, arg_op);
-                }
-
-                // Push function DefId onto the call stack
-                self.execution_path.push_function(func_def_id);
+                self.handle_function_call(func_def_id, ret_local_op, arg_ops);
             }
             LowRpilInst::CallClosure {
-                closure,
-                ret,
+                closure: closure_local_op,
+                ret: ret_local_op,
                 args_op,
             } => {
-                let depth = self.execution_path.stack_depth();
+                self.handle_closure_call(closure_local_op, ret_local_op, args_op);
             }
-            LowRpilInst::Assign { lhs, rhs } => unimplemented!(),
+            LowRpilInst::Assign {
+                lhs: lhs_local_op,
+                rhs: rhs_local_op,
+            } => {
+                let depth = self.execution_path.stack_depth();
+                let lhs = self.reduced_rpil_op(&LowRpilOp::with_depth(lhs_local_op, depth));
+                let rhs = self.reduced_rpil_op(&LowRpilOp::with_depth(rhs_local_op, depth));
+                self.insert_mapping(lhs, rhs);
+                println!("Ctxt: {:?}", self);
+            }
             LowRpilInst::Pin(op) => unimplemented!(),
             LowRpilInst::Move(op) => unimplemented!(),
             LowRpilInst::Forget(op) => unimplemented!(),
@@ -86,18 +74,155 @@ impl TranslationCtxt {
                 self.execution_path.pop_basic_block();
             }
             LowRpilInst::Return => {
+                let depth = self.execution_path.stack_depth();
+                let mut to_remove = vec![];
+                for (key, (val, _serial)) in self.mapping.iter() {
+                    if key.depth() >= depth || val.depth() >= depth {
+                        to_remove.push(key.clone());
+                    }
+                }
+                for key in to_remove {
+                    self.mapping.remove(&key);
+                }
                 self.execution_path.pop_function();
             }
         }
     }
 
+    fn handle_function_call(
+        &mut self,
+        func_def_id: DefId,
+        ret_local_op: LowRpilOp,
+        arg_ops: Vec<LowRpilOp>,
+    ) {
+        let depth = self.execution_path.stack_depth();
+
+        // Insert a mapping for the return place
+        let sub_ret_op = LowRpilOp::UpLocal {
+            depth: depth + 1,
+            index: 0,
+        };
+        let ret_op = LowRpilOp::local_with_depth(ret_local_op, depth);
+        self.insert_mapping(sub_ret_op, ret_op);
+
+        // Insert mappings for argument places
+        for (idx, arg_local_op) in arg_ops.into_iter().enumerate() {
+            let sub_arg_op = LowRpilOp::UpLocal {
+                depth: depth + 1,
+                index: idx + 1,
+            };
+            let arg_op = LowRpilOp::local_with_depth(arg_local_op, depth);
+            self.insert_mapping(sub_arg_op, arg_op);
+        }
+
+        // Push function DefId onto the call stack
+        self.execution_path.push_function(func_def_id);
+    }
+
+    fn handle_closure_call(
+        &mut self,
+        closure_local_op: LowRpilOp,
+        ret_local_op: LowRpilOp,
+        args_op: LowRpilOp,
+    ) {
+        let depth = self.execution_path.stack_depth();
+
+        // Insert a mapping for the return place
+        let sub_ret_op = LowRpilOp::UpLocal {
+            depth: depth + 1,
+            index: 0,
+        };
+        let ret_op = LowRpilOp::local_with_depth(ret_local_op, depth);
+        self.insert_mapping(sub_ret_op, ret_op);
+
+        // Insert a mapping for the closure place
+        let sub_closure_op = LowRpilOp::UpLocal {
+            depth: depth + 1,
+            index: 1,
+        };
+        let closure_op = LowRpilOp::local_with_depth(closure_local_op, depth);
+        self.insert_mapping(sub_closure_op, closure_op.clone());
+
+        // Insert mappings for argument places
+        let mut to_insert = vec![];
+        for (key, (val, _serial)) in self.mapping.iter() {
+            let place_index = match key {
+                LowRpilOp::Place {
+                    base,
+                    place_desc: PlaceDesc::P(place_index),
+                } if **base == args_op => place_index,
+                _ => continue,
+            };
+            let sub_arg_op = LowRpilOp::UpLocal {
+                depth: depth + 1,
+                index: place_index + 2,
+            };
+            let arg_op = LowRpilOp::local_with_depth(val.clone(), depth);
+            to_insert.push((sub_arg_op, arg_op));
+        }
+        for (sub_arg_op, arg_op) in to_insert {
+            self.insert_mapping(sub_arg_op, arg_op);
+        }
+
+        // Push the closure's function DefId onto the call stack
+        let func_def_id = self.mapped_rpil_op(&closure_op).assume_closure().unwrap();
+        self.execution_path.push_function(func_def_id);
+    }
+
+    #[inline(always)]
     pub fn is_basic_block_visited(&self, bb: mir::BasicBlock) -> bool {
         self.execution_path.is_basic_block_visited(bb)
+    }
+
+    #[inline(always)]
+    pub fn stack_top_function_def_id(&self) -> DefId {
+        self.execution_path.stack_top_func_def_id()
     }
 
     fn insert_mapping(&mut self, key: LowRpilOp, value: LowRpilOp) {
         self.mapping.insert(key, (value, self.serial));
         self.serial += 1;
+    }
+
+    fn reduced_rpil_op(&self, op: &LowRpilOp) -> LowRpilOp {
+        self.mapped_rpil_op(&match op {
+            LowRpilOp::Local { .. } | LowRpilOp::UpLocal { .. } | LowRpilOp::Closure { .. } => {
+                op.clone()
+            }
+            LowRpilOp::Place { base, place_desc } => LowRpilOp::Place {
+                base: Box::new(self.reduced_rpil_op(base)),
+                place_desc: place_desc.clone(),
+            },
+            LowRpilOp::Ref(inner_op) => LowRpilOp::Ref(Box::new(self.reduced_rpil_op(inner_op))),
+            LowRpilOp::Deref(inner_op) => match self.reduced_rpil_op(inner_op) {
+                LowRpilOp::Ref(referenced_op) => *referenced_op.clone(),
+                _ => panic!("Failed to deref LowRpilOp '{:?}'", inner_op),
+            },
+        })
+    }
+
+    fn mapped_rpil_op(&self, op: &LowRpilOp) -> LowRpilOp {
+        if let Some((mapped_op, _serial)) = self.mapping.get(op) {
+            self.mapped_rpil_op(mapped_op)
+        } else {
+            op.clone()
+        }
+    }
+}
+
+impl fmt::Debug for TranslationCtxt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut entries: Vec<_> = self.mapping.iter().collect();
+        entries.sort_by_key(|(_, (_, serial))| *serial);
+        let sorted_entries = entries;
+        write!(f, "{{")?;
+        for (i, (key, (val, _serial))) in sorted_entries.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{:?}: ({:?})", key, val)?;
+        }
+        write!(f, "}} {:?}", self.status_changes)
     }
 }
 
@@ -112,10 +237,6 @@ impl fmt::Debug for TranslationCtxtWithTcx<'_, '_> {
             path: &self.trcx.execution_path,
             tcx: self.tcx,
         };
-        write!(
-            f,
-            "{:?}\nCtxt: {:?} {:?}",
-            execution_path_with_tcx, self.trcx.mapping, self.trcx.status_changes
-        )
+        write!(f, "{:?}\nCtxt: {:?}", execution_path_with_tcx, self.trcx)
     }
 }
