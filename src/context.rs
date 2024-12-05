@@ -5,18 +5,8 @@ use rustc_middle::ty::TyCtxt;
 
 use std::fmt;
 
-use crate::path::ExecutionPathWithTcx;
-use crate::rpil::RpilInst;
-
-use super::path::ExecutionPath;
-use super::rpil::{LowRpilInst, LowRpilOp, PlaceDesc};
-
-#[derive(Debug, Clone)]
-enum StatusChange {
-    Pin,
-    Move,
-    Forget,
-}
+use super::path::{ExecutionPath, ExecutionPathWithTcx};
+use super::rpil::{LowRpilInst, LowRpilOp, PlaceDesc, RpilInst, StatusChange};
 
 #[derive(Clone)]
 pub struct TranslationCtxt {
@@ -111,27 +101,6 @@ impl TranslationCtxt {
             .collect::<String>()
     }
 
-    pub fn into_rpil_insts(self, func_argc: usize) -> Vec<RpilInst> {
-        let assignments = self
-            .mapping
-            .into_iter()
-            .filter(|(key, (val, _))| {
-                matches!(
-                    (key.origin_index(), val.origin_index()),
-                    (Some(key_index), Some(val_index))
-                        if key_index <= func_argc && val_index <= func_argc
-                )
-            })
-            .map(|(key, (val, serial))| {
-                let inst = RpilInst::from_low_rpil_assignment(key, val);
-                (inst, serial)
-            })
-            .collect::<Vec<_>>();
-
-        println!("{:?}", assignments);
-        vec![]
-    }
-
     fn handle_function_call(
         &mut self,
         func_def_id: DefId,
@@ -211,7 +180,10 @@ impl TranslationCtxt {
         let func_def_id = self.mapped_rpil_op(&closure_op).assume_closure().unwrap();
         self.execution_path.push_function(func_def_id);
     }
+}
 
+// Mapping-related operations
+impl TranslationCtxt {
     fn insert_mapping(&mut self, key: LowRpilOp, value: LowRpilOp) {
         self.mapping.insert(key, (value, self.serial));
         self.serial += 1;
@@ -252,6 +224,42 @@ impl TranslationCtxt {
                 _ => panic!("Failed to deref LowRpilOp '{:?}'", inner_op),
             },
         })
+    }
+}
+
+// RPIL conversion
+impl TranslationCtxt {
+    pub fn into_rpil_insts(self, func_argc: usize) -> Vec<RpilInst> {
+        let assignments: Vec<_> = self
+            .mapping
+            .into_iter()
+            .filter(|(key, (val, _))| {
+                matches!(
+                    (key.origin_index(), val.origin_index()),
+                    (Some(key_index), Some(val_index))
+                        if key_index <= func_argc && val_index <= func_argc
+                )
+            })
+            .map(|(key, (val, serial))| {
+                let inst = RpilInst::from_low_rpil_assignment(key, val);
+                (inst, serial)
+            })
+            .collect();
+        let status_changes: Vec<_> = self
+            .status_changes
+            .into_iter()
+            .map(|(low_op, status_change, serial)| {
+                let inst = RpilInst::from_low_rpil_status_change(low_op, status_change);
+                (inst, serial)
+            })
+            .collect();
+        let mut insts_with_serial: Vec<_> = assignments.into_iter().chain(status_changes).collect();
+        insts_with_serial.sort_by_key(|(_, serial)| *serial);
+
+        insts_with_serial
+            .into_iter()
+            .map(|(inst, _)| inst)
+            .collect()
     }
 }
 
