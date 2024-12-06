@@ -4,6 +4,8 @@ use rustc_middle::mir;
 use std::fmt;
 use std::mem::discriminant;
 
+use super::mapping::UnaryRecursive;
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum LowRpilOp {
     Local {
@@ -22,6 +24,31 @@ pub enum LowRpilOp {
     },
     Ref(Box<LowRpilOp>),
     Deref(Box<LowRpilOp>),
+}
+
+impl UnaryRecursive for LowRpilOp {
+    fn get_inner(&self) -> Option<&Self> {
+        match self {
+            LowRpilOp::Local { .. } | LowRpilOp::UpLocal { .. } | LowRpilOp::Closure { .. } => None,
+            LowRpilOp::Place { base: op, .. } | LowRpilOp::Ref(op) | LowRpilOp::Deref(op) => {
+                Some(op)
+            }
+        }
+    }
+
+    fn replace_inner(&self, op: Self) -> Self {
+        match self {
+            LowRpilOp::Local { .. } | LowRpilOp::UpLocal { .. } | LowRpilOp::Closure { .. } => {
+                unreachable!()
+            }
+            LowRpilOp::Place { place_desc, .. } => LowRpilOp::Place {
+                base: Box::new(op),
+                place_desc: place_desc.clone(),
+            },
+            LowRpilOp::Ref(_) => LowRpilOp::Ref(Box::new(op)),
+            LowRpilOp::Deref(_) => LowRpilOp::Deref(Box::new(op)),
+        }
+    }
 }
 
 pub enum LowRpilInst {

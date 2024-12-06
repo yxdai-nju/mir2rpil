@@ -43,3 +43,8 @@ pub fn return_captured_ref2<'a, T>(
         closure2(val)
     }
 }
+
+pub fn boxed_ref_assignment<'a, T>(mut lhs: Box<&'a T>, rhs: Box<&'a T>) -> Box<&'a T> {
+    *lhs = *rhs;
+    lhs
+}

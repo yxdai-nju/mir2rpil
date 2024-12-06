@@ -1,5 +1,5 @@
 [package]
-name = "single_crate"
+name = "refstore"
 version = "0.1.0"
 edition = "2021"
 

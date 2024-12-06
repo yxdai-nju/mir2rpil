@@ -5,17 +5,21 @@ use rustc_middle::ty::TyCtxt;
 
 use std::fmt;
 
+use super::mapping::{SerialMap, SerialMapForUnaryRecursive};
 use super::path::{ExecutionPath, ExecutionPathWithTcx};
 use super::rpil::{LowRpilInst, LowRpilOp, PlaceDesc, RpilInst, StatusChange};
 
 #[derive(Clone)]
 pub struct TranslationCtxt {
     execution_path: ExecutionPath,
-    mapping: FxHashMap<LowRpilOp, (LowRpilOp, usize)>,
+    mapping: LowRpilMapping,
     status_changes: Vec<(LowRpilOp, StatusChange, usize)>,
     serial: usize,
     variant: Vec<usize>,
 }
+
+#[derive(Clone)]
+struct LowRpilMapping(FxHashMap<LowRpilOp, (LowRpilOp, usize)>);
 
 impl TranslationCtxt {
     pub fn from_function_def_id(func_def_id: DefId) -> Self {
@@ -23,7 +27,7 @@ impl TranslationCtxt {
         execution_path.push_function(func_def_id);
         Self {
             execution_path,
-            mapping: FxHashMap::default(),
+            mapping: LowRpilMapping(FxHashMap::default()),
             status_changes: vec![],
             serial: 0,
             variant: vec![],
@@ -55,9 +59,11 @@ impl TranslationCtxt {
                 rhs: rhs_local_op,
             } => {
                 let depth = self.execution_path.stack_depth();
-                let lhs = self.reduced_rpil_op(&LowRpilOp::with_depth(lhs_local_op, depth));
-                let rhs = self.reduced_rpil_op(&LowRpilOp::with_depth(rhs_local_op, depth));
-                self.insert_mapping(lhs, rhs);
+                let lhs = LowRpilOp::with_depth(lhs_local_op, depth);
+                let rhs = LowRpilOp::with_depth(rhs_local_op, depth);
+                let reduced_lhs = self.reduced_rpil_op(&lhs);
+                let reduced_rhs = self.reduced_rpil_op(&rhs);
+                self.insert_mapping(reduced_lhs, reduced_rhs);
                 println!("Ctxt: {:?}", self);
             }
             LowRpilInst::Pin(op) => unimplemented!(),
@@ -157,7 +163,7 @@ impl TranslationCtxt {
 
         // Insert mappings for argument places
         let mut to_insert = vec![];
-        for (key, (val, _serial)) in self.mapping.iter() {
+        for (key, val, _serial) in self.mapping.iter() {
             let place_index = match key {
                 LowRpilOp::Place {
                     base,
@@ -184,14 +190,14 @@ impl TranslationCtxt {
 
 // Mapping-related operations
 impl TranslationCtxt {
-    fn insert_mapping(&mut self, key: LowRpilOp, value: LowRpilOp) {
-        self.mapping.insert(key, (value, self.serial));
+    fn insert_mapping(&mut self, lhs: LowRpilOp, rhs: LowRpilOp) {
+        self.mapping.insert(lhs, rhs, self.serial);
         self.serial += 1;
     }
 
     fn remove_over_depth_mapping(&mut self, max_depth: usize) {
         let mut to_remove = vec![];
-        for (key, (val, _serial)) in self.mapping.iter() {
+        for (key, val, _serial) in self.mapping.iter() {
             if key.depth() >= max_depth || val.depth() >= max_depth {
                 to_remove.push(key.clone());
             }
@@ -202,7 +208,7 @@ impl TranslationCtxt {
     }
 
     fn mapped_rpil_op(&self, op: &LowRpilOp) -> LowRpilOp {
-        if let Some((mapped_op, _serial)) = self.mapping.get(op) {
+        if let Some(mapped_op) = self.mapping.get(op) {
             self.mapped_rpil_op(mapped_op)
         } else {
             op.clone()
@@ -219,29 +225,65 @@ impl TranslationCtxt {
                 place_desc: place_desc.clone(),
             },
             LowRpilOp::Ref(inner_op) => LowRpilOp::Ref(Box::new(self.reduced_rpil_op(inner_op))),
-            LowRpilOp::Deref(inner_op) => match self.reduced_rpil_op(inner_op) {
-                LowRpilOp::Ref(referenced_op) => *referenced_op.clone(),
-                _ => panic!("Failed to deref LowRpilOp '{:?}'", inner_op),
-            },
+            LowRpilOp::Deref(inner_op) => {
+                let reduced_inner_op = self.reduced_rpil_op(inner_op);
+                // Turn `Deref(Ref(op))` into `op` when possible
+                match reduced_inner_op {
+                    LowRpilOp::Ref(referenced_op) => *referenced_op.clone(),
+                    _ => LowRpilOp::Deref(Box::new(reduced_inner_op)),
+                }
+            }
         })
     }
 }
 
+impl SerialMap<LowRpilOp> for LowRpilMapping {
+    fn iter<'a>(&'a self) -> impl Iterator<Item = (&'a LowRpilOp, &'a LowRpilOp, usize)>
+    where
+        LowRpilOp: 'a,
+    {
+        self.0
+            .iter()
+            .map(move |(key, (val, serial))| (key, val, *serial))
+    }
+
+    fn into_iter(self) -> impl Iterator<Item = (LowRpilOp, LowRpilOp, usize)> {
+        self.0
+            .into_iter()
+            .map(|(key, (val, serial))| (key, val, serial))
+    }
+
+    fn insert(&mut self, key: LowRpilOp, val: LowRpilOp, serial: usize) {
+        self.0.insert(key, (val, serial));
+    }
+
+    fn remove(&mut self, key: &LowRpilOp) {
+        self.0.remove(key);
+    }
+
+    fn get(&self, key: &LowRpilOp) -> Option<&LowRpilOp> {
+        self.0.get(key).map(|(val, _serial)| val)
+    }
+}
+
+impl SerialMapForUnaryRecursive<LowRpilOp> for LowRpilMapping {}
+
 // RPIL conversion
 impl TranslationCtxt {
-    pub fn into_rpil_insts(self, func_argc: usize) -> Vec<RpilInst> {
+    pub fn into_rpil_insts(mut self, func_argc: usize) -> Vec<RpilInst> {
+        self.mapping.expand_to_transitive_closure();
         let assignments: Vec<_> = self
             .mapping
             .into_iter()
-            .filter(|(key, (val, _))| {
+            .filter(|(low_lhs, low_rhs, _)| {
                 matches!(
-                    (key.origin_index(), val.origin_index()),
+                    (low_lhs.origin_index(), low_rhs.origin_index()),
                     (Some(key_index), Some(val_index))
                         if key_index <= func_argc && val_index <= func_argc
                 )
             })
-            .map(|(key, (val, serial))| {
-                let inst = RpilInst::from_low_rpil_assignment(key, val);
+            .map(|(low_lhs, low_rhs, serial)| {
+                let inst = RpilInst::from_low_rpil_assignment(low_lhs, low_rhs);
                 (inst, serial)
             })
             .collect();
@@ -266,10 +308,10 @@ impl TranslationCtxt {
 impl fmt::Debug for TranslationCtxt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut entries: Vec<_> = self.mapping.iter().collect();
-        entries.sort_by_key(|(_, (_, serial))| *serial);
+        entries.sort_by_key(|(_, _, serial)| *serial);
         let sorted_entries = entries;
         write!(f, "{{")?;
-        for (i, (key, (val, _serial))) in sorted_entries.iter().enumerate() {
+        for (i, (key, val, _serial)) in sorted_entries.iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
             }
