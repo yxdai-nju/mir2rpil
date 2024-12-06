@@ -4,7 +4,7 @@ use rustc_middle::mir;
 use std::fmt;
 use std::mem::discriminant;
 
-use super::mapping::UnaryRecursive;
+use super::serialmap::UnaryRecursive;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum LowRpilOp {

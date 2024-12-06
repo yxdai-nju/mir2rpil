@@ -1,25 +1,22 @@
-use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir;
 use rustc_middle::ty::TyCtxt;
 
 use std::fmt;
 
-use super::mapping::{SerialMap, SerialMapForUnaryRecursive};
 use super::path::{ExecutionPath, ExecutionPathWithTcx};
 use super::rpil::{LowRpilInst, LowRpilOp, PlaceDesc, RpilInst, StatusChange};
+use super::rpilmap::LowRpilMap;
+use super::serialmap::{SerialMap, SerialMapForUnaryRecursive};
 
 #[derive(Clone)]
 pub struct TranslationCtxt {
     execution_path: ExecutionPath,
-    mapping: LowRpilMapping,
+    mapping: LowRpilMap,
     status_changes: Vec<(LowRpilOp, StatusChange, usize)>,
     serial: usize,
     variant: Vec<usize>,
 }
-
-#[derive(Clone)]
-struct LowRpilMapping(FxHashMap<LowRpilOp, (LowRpilOp, usize)>);
 
 impl TranslationCtxt {
     pub fn from_function_def_id(func_def_id: DefId) -> Self {
@@ -27,7 +24,7 @@ impl TranslationCtxt {
         execution_path.push_function(func_def_id);
         Self {
             execution_path,
-            mapping: LowRpilMapping(FxHashMap::default()),
+            mapping: LowRpilMap::new(),
             status_changes: vec![],
             serial: 0,
             variant: vec![],
@@ -83,7 +80,7 @@ impl TranslationCtxt {
             LowRpilInst::Return => {
                 let max_depth = self.execution_path.stack_depth();
                 if max_depth > 1 {
-                    self.remove_over_depth_mapping(max_depth);
+                    self.mapping.remove_over_depth_mapping(max_depth);
                 }
                 self.execution_path.pop_function();
             }
@@ -200,18 +197,6 @@ impl TranslationCtxt {
         self.serial += 1;
     }
 
-    fn remove_over_depth_mapping(&mut self, max_depth: usize) {
-        let mut to_remove = vec![];
-        for (key, val, _serial) in self.mapping.iter() {
-            if key.depth() >= max_depth || val.depth() >= max_depth {
-                to_remove.push(key.clone());
-            }
-        }
-        for key in to_remove {
-            self.mapping.remove(&key);
-        }
-    }
-
     fn mapped_rpil_op(&self, op: &LowRpilOp) -> LowRpilOp {
         if let Some(mapped_op) = self.mapping.get(op) {
             self.mapped_rpil_op(mapped_op)
@@ -250,40 +235,10 @@ impl TranslationCtxt {
     }
 }
 
-impl SerialMap<LowRpilOp> for LowRpilMapping {
-    fn iter<'a>(&'a self) -> impl Iterator<Item = (&'a LowRpilOp, &'a LowRpilOp, usize)>
-    where
-        LowRpilOp: 'a,
-    {
-        self.0
-            .iter()
-            .map(move |(key, (val, serial))| (key, val, *serial))
-    }
-
-    fn into_iter(self) -> impl Iterator<Item = (LowRpilOp, LowRpilOp, usize)> {
-        self.0
-            .into_iter()
-            .map(|(key, (val, serial))| (key, val, serial))
-    }
-
-    fn insert(&mut self, key: LowRpilOp, val: LowRpilOp, serial: usize) {
-        self.0.insert(key, (val, serial));
-    }
-
-    fn remove(&mut self, key: &LowRpilOp) {
-        self.0.remove(key);
-    }
-
-    fn get(&self, key: &LowRpilOp) -> Option<&LowRpilOp> {
-        self.0.get(key).map(|(val, _serial)| val)
-    }
-}
-
-impl SerialMapForUnaryRecursive<LowRpilOp> for LowRpilMapping {}
-
 // RPIL conversion
 impl TranslationCtxt {
     pub fn into_rpil_insts(mut self, func_argc: usize) -> Vec<RpilInst> {
+        self.mapping.remove_closure_mapping();
         self.mapping.expand_to_transitive_closure();
         let assignments: Vec<_> = self
             .mapping
