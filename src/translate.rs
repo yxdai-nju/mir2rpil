@@ -138,8 +138,7 @@ fn translate_terminator(
                 let arg_ops = arg_list
                     .iter()
                     .filter_map(|arg_operand| match arg_operand {
-                        mir::Operand::Copy(_) => unreachable!(),
-                        mir::Operand::Move(arg_place) => {
+                        mir::Operand::Copy(arg_place) | mir::Operand::Move(arg_place) => {
                             let arg_op = LowRpilOp::from_mir_place(arg_place);
                             Some(arg_op)
                         }
@@ -348,8 +347,21 @@ fn translate_statement_of_assign_aggregate<'tcx>(
                 trcx = handle_aggregate(trcx, lhs_place, value);
             }
         }
-        mir::AggregateKind::Adt(_, variant_idx, _, _, _) => {
-            println!("[Aggregate] Adt(variant_idx={:?})", variant_idx);
+        mir::AggregateKind::Adt(def_id, variant_idx, _, _, _) => {
+            let def_path = tcx.def_path_str(*def_id);
+            println!(
+                "[Aggregate] Adt(def_path={:?}, variant_idx={:?})",
+                def_path, variant_idx
+            );
+            if def_path == "std::pin::Pin" {
+                match values.iter().next().unwrap() {
+                    mir::Operand::Copy(rhs_place) => {
+                        let rhs = LowRpilOp::from_mir_place(rhs_place);
+                        trcx.eval(LowRpilInst::Pin(rhs));
+                    }
+                    mir::Operand::Move(_) | mir::Operand::Constant(_) => unreachable!(),
+                }
+            }
             for (lidx, value) in values.iter().enumerate() {
                 let lhs_place = LowRpilOp::Place {
                     base: Box::new(lhs.clone()),

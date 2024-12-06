@@ -1,4 +1,4 @@
-// use std::pin::Pin;
+use std::pin::Pin;
 
 pub struct RefStore<'a, T> {
     ref0: Option<&'a mut T>,
@@ -19,7 +19,7 @@ pub fn store_p1<'a, T>(x: &'a mut T) -> RefStore<'a, T> {
     }
 }
 
-// pub fn pin_p0<'a, T>(refstore: &mut RefStore<'a, T>) -> Pin<&'a mut T> {
-//     let x = refstore.ref0.take().unwrap();
-//     unsafe { Pin::new_unchecked(x) }
-// }
+pub fn pin_p0<'a, T>(refstore: &mut RefStore<'a, T>) -> Pin<&'a mut T> {
+    let x = refstore.ref0.take().unwrap();
+    unsafe { Pin::new_unchecked(x) }
+}

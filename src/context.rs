@@ -66,7 +66,12 @@ impl TranslationCtxt {
                 self.insert_mapping(reduced_lhs, reduced_rhs);
                 println!("Ctxt: {:?}", self);
             }
-            LowRpilInst::Pin(op) => unimplemented!(),
+            LowRpilInst::Pin(local_op) => {
+                let depth = self.execution_path.stack_depth();
+                let op = LowRpilOp::with_depth(local_op, depth);
+                let reduced_op = self.reduced_rpil_op(&op);
+                self.insert_status_change(reduced_op, StatusChange::Pin);
+            }
             LowRpilInst::Move(op) => unimplemented!(),
             LowRpilInst::Forget(op) => unimplemented!(),
             LowRpilInst::EnterBasicBlock { bb } => {
@@ -234,6 +239,14 @@ impl TranslationCtxt {
                 }
             }
         })
+    }
+}
+
+// Status-change-related operations
+impl TranslationCtxt {
+    fn insert_status_change(&mut self, op: LowRpilOp, status_change: StatusChange) {
+        self.status_changes.push((op, status_change, self.serial));
+        self.serial += 1;
     }
 }
 
