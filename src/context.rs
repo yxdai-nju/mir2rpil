@@ -55,22 +55,23 @@ impl TranslationCtxt {
                 lhs: lhs_local_op,
                 rhs: rhs_local_op,
             } => {
-                let depth = self.execution_path.stack_depth();
-                let lhs = LowRpilOp::with_depth(lhs_local_op, depth);
-                let rhs = LowRpilOp::with_depth(rhs_local_op, depth);
-                let reduced_lhs = self.reduced_rpil_op(&lhs);
-                let reduced_rhs = self.reduced_rpil_op(&rhs);
-                self.insert_mapping(reduced_lhs, reduced_rhs);
+                let lhs = self.local_rpil_op_into_reduced_op_with_depth(lhs_local_op);
+                let rhs = self.local_rpil_op_into_reduced_op_with_depth(rhs_local_op);
+                self.insert_mapping(lhs, rhs);
                 println!("Ctxt: {:?}", self);
             }
             LowRpilInst::Pin(local_op) => {
-                let depth = self.execution_path.stack_depth();
-                let op = LowRpilOp::with_depth(local_op, depth);
-                let reduced_op = self.reduced_rpil_op(&op);
-                self.insert_status_change(reduced_op, StatusChange::Pin);
+                let op = self.local_rpil_op_into_reduced_op_with_depth(local_op);
+                self.insert_status_change(op, StatusChange::Pin);
             }
-            LowRpilInst::Move(op) => unimplemented!(),
-            LowRpilInst::Forget(op) => unimplemented!(),
+            LowRpilInst::Move(local_op) => {
+                let op = self.local_rpil_op_into_reduced_op_with_depth(local_op);
+                self.insert_status_change(op, StatusChange::Move);
+            }
+            LowRpilInst::Forget(local_op) => {
+                let op = self.local_rpil_op_into_reduced_op_with_depth(local_op);
+                self.insert_status_change(op, StatusChange::Forget);
+            }
             LowRpilInst::EnterBasicBlock { bb } => {
                 self.execution_path.push_basic_block(bb);
             }
@@ -225,6 +226,12 @@ impl TranslationCtxt {
             }
         })
     }
+
+    fn local_rpil_op_into_reduced_op_with_depth(&self, local_op: LowRpilOp) -> LowRpilOp {
+        let depth = self.execution_path.stack_depth();
+        let op = LowRpilOp::with_depth(local_op, depth);
+        self.reduced_rpil_op(&op)
+    }
 }
 
 // Status-change-related operations
@@ -238,7 +245,6 @@ impl TranslationCtxt {
 // RPIL conversion
 impl TranslationCtxt {
     pub fn into_rpil_insts(mut self, func_argc: usize) -> Vec<RpilInst> {
-        self.mapping.remove_closure_mapping();
         self.mapping.expand_to_transitive_closure();
         let assignments: Vec<_> = self
             .mapping

@@ -257,11 +257,11 @@ fn translate_statement_of_assign<'tcx>(
             trcx.eval(LowRpilInst::Assign { lhs, rhs });
         }
         mir::Rvalue::Ref(_, kind, rplace) => {
-            let rhs = LowRpilOp::from_mir_place(rplace);
+            let rhs_inner = LowRpilOp::from_mir_place(rplace);
             match kind {
                 mir::BorrowKind::Shared | mir::BorrowKind::Mut { .. } => {
                     // println!("[Rvalue] Ref(Shared, {:?})", rplace);
-                    let rhs = LowRpilOp::Ref(Box::new(rhs));
+                    let rhs = LowRpilOp::Ref(Box::new(rhs_inner));
                     trcx.eval(LowRpilInst::Assign { lhs, rhs });
                 }
                 mir::BorrowKind::Fake(kind) => {
@@ -269,6 +269,15 @@ fn translate_statement_of_assign<'tcx>(
                     unimplemented!();
                 }
             };
+        }
+        mir::Rvalue::RawPtr(_, rplace) => {
+            println!("[Rvalue] RawPtr({:?})", rplace);
+            let rhs_inner = LowRpilOp::from_mir_place(rplace);
+            let rhs = match rhs_inner {
+                LowRpilOp::Deref(rhs_referree) => *rhs_referree,
+                _ => unimplemented!(),
+            };
+            trcx.eval(LowRpilInst::Assign { lhs, rhs });
         }
         mir::Rvalue::Aggregate(aggregate, values) => {
             println!("[Rvalue] Aggregate({:?}, {:?})", aggregate, values);
@@ -349,9 +358,16 @@ fn translate_statement_of_assign_aggregate<'tcx>(
         }
         mir::AggregateKind::Adt(def_id, variant_idx, _, _, _) => {
             let def_path = tcx.def_path_str(*def_id);
+            let is_transparent = tcx
+                .type_of(def_id)
+                .skip_binder()
+                .ty_adt_def()
+                .unwrap()
+                .repr()
+                .transparent();
             println!(
-                "[Aggregate] Adt(def_path={:?}, variant_idx={:?})",
-                def_path, variant_idx
+                "[Aggregate] Adt(def_path={:?}, variant_idx={:?}, transparent={:?})",
+                def_path, variant_idx, is_transparent
             );
             if def_path == "std::pin::Pin" {
                 match values.iter().next().unwrap() {

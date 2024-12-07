@@ -63,7 +63,9 @@ where
         let mut to_insert = vec![];
         for (key, val, serial) in self.iter() {
             for (alias_key, alias_serial) in structural_aliases(&reverse_mapping, key) {
-                assert!(alias_serial > serial);
+                if alias_serial < serial {
+                    continue;
+                }
                 to_insert.push((alias_key, val.clone(), alias_serial));
             }
         }

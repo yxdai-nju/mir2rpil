@@ -4,7 +4,6 @@ extern crate rustc_driver;
 extern crate rustc_hir;
 extern crate rustc_interface;
 extern crate rustc_middle;
-extern crate rustc_session;
 
 use rustc_driver::Compilation;
 use rustc_hir::{self as hir};
