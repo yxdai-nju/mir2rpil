@@ -53,7 +53,10 @@ impl rustc_driver::Callbacks for Mir2rpilCompilerCalls {
         println!("Public Functions: {:#?}", pub_funcs);
         for pub_func in pub_funcs {
             let rpil_insts_variants = mir2rpil::translate_function_def(tcx, pub_func);
-            assert!(!rpil_insts_variants.is_empty());
+            if rpil_insts_variants.is_empty() {
+                println!("No Variants available");
+                continue;
+            }
             for (variant_idx, rpil_insts) in rpil_insts_variants.iter().enumerate() {
                 println!("Variant {}:", variant_idx + 1);
                 mir2rpil::debug::print_func_rpil_insts(tcx, pub_func, rpil_insts);

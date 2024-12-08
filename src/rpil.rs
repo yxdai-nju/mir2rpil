@@ -85,6 +85,7 @@ pub enum RpilOp {
         base: Box<RpilOp>,
         place_desc: PlaceDesc,
     },
+    Ref(Box<RpilOp>),
     Deref(Box<RpilOp>),
 }
 
@@ -202,7 +203,7 @@ fn project_rpil_place(place: &mir::Place<'_>, idx: usize) -> LowRpilOp {
 impl RpilOp {
     pub fn from_low_rpil(op: LowRpilOp) -> RpilOp {
         match op {
-            LowRpilOp::Local { .. } | LowRpilOp::Closure { .. } | LowRpilOp::Ref(_) => {
+            LowRpilOp::Local { .. } | LowRpilOp::Closure { .. } => {
                 unreachable!()
             }
             LowRpilOp::UpLocal { index, .. } => RpilOp::Local { index },
@@ -210,6 +211,7 @@ impl RpilOp {
                 base: Box::new(RpilOp::from_low_rpil(*base)),
                 place_desc: place_desc.clone(),
             },
+            LowRpilOp::Ref(inner_op) => RpilOp::Ref(Box::new(RpilOp::from_low_rpil(*inner_op))),
             LowRpilOp::Deref(inner_op) => RpilOp::Deref(Box::new(RpilOp::from_low_rpil(*inner_op))),
         }
     }
@@ -219,7 +221,10 @@ impl RpilInst {
     pub fn from_low_rpil_assignment(low_lhs: LowRpilOp, low_rhs: LowRpilOp) -> RpilInst {
         let lhs = RpilOp::from_low_rpil(low_lhs);
         let rhs = RpilOp::from_low_rpil(low_rhs);
-        RpilInst::Bind(lhs, rhs)
+        match rhs {
+            RpilOp::Ref(inner_op) => RpilInst::Borrow(lhs, *inner_op),
+            _ => RpilInst::Bind(lhs, rhs),
+        }
     }
 
     pub fn from_low_rpil_status_change(low_op: LowRpilOp, status_change: StatusChange) -> RpilInst {
@@ -294,6 +299,7 @@ impl fmt::Debug for RpilOp {
         match self {
             RpilOp::Local { index } => write!(f, "_{}", index),
             RpilOp::Place { base, place_desc } => write!(f, "{:?}.{:?}", base, place_desc),
+            RpilOp::Ref(op) => write!(f, "& {:?}", op),
             RpilOp::Deref(op) => write!(f, "(*{:?})", op),
         }
     }

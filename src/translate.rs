@@ -275,7 +275,7 @@ fn translate_statement_of_assign<'tcx>(
             let rhs_inner = LowRpilOp::from_mir_place(rplace);
             let rhs = match rhs_inner {
                 LowRpilOp::Deref(rhs_referree) => *rhs_referree,
-                _ => unimplemented!(),
+                _ => LowRpilOp::Ref(Box::new(rhs_inner)), // unimplemented!(),
             };
             trcx.eval(LowRpilInst::Assign { lhs, rhs });
         }
@@ -378,16 +378,22 @@ fn translate_statement_of_assign_aggregate<'tcx>(
                     mir::Operand::Move(_) | mir::Operand::Constant(_) => unreachable!(),
                 }
             }
-            for (lidx, value) in values.iter().enumerate() {
-                let lhs_place = LowRpilOp::Place {
-                    base: Box::new(lhs.clone()),
-                    place_desc: PlaceDesc::V(variant_idx.as_usize()),
-                };
-                let lhs_place = LowRpilOp::Place {
-                    base: Box::new(lhs_place),
-                    place_desc: PlaceDesc::P(lidx),
-                };
+            if is_transparent {
+                let lhs_place = lhs.clone();
+                let value = values.iter().next().unwrap();
                 trcx = handle_aggregate(trcx, lhs_place, value);
+            } else {
+                for (lidx, value) in values.iter().enumerate() {
+                    let lhs_place = LowRpilOp::Place {
+                        base: Box::new(lhs.clone()),
+                        place_desc: PlaceDesc::V(variant_idx.as_usize()),
+                    };
+                    let lhs_place = LowRpilOp::Place {
+                        base: Box::new(lhs_place),
+                        place_desc: PlaceDesc::P(lidx),
+                    };
+                    trcx = handle_aggregate(trcx, lhs_place, value);
+                }
             }
         }
         mir::AggregateKind::Closure(def_id, _) => {
