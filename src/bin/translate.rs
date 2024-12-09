@@ -18,6 +18,7 @@ use serde_json::Value;
 struct Mir2rpilCompilerCalls {}
 
 impl rustc_driver::Callbacks for Mir2rpilCompilerCalls {
+    #[allow(clippy::needless_lifetimes)]
     fn after_analysis<'tcx>(
         &mut self,
         _: &rustc_interface::interface::Compiler,
@@ -78,7 +79,7 @@ struct Args {
 
 /// Execute a compiler with the given CLI arguments and callbacks.
 fn run_compiler(
-    mut args: Vec<String>,
+    args: Vec<String>,
     callbacks: &mut (dyn rustc_driver::Callbacks + Send),
     using_internal_features: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> ! {
@@ -91,12 +92,11 @@ fn run_compiler(
     std::process::exit(exit_code)
 }
 
-struct Invocation {
-    program: String,
+struct RustcInvocation {
     args: Vec<String>,
 }
 
-fn get_rustc_invocation(manifest_path: &str) -> Result<Invocation> {
+fn get_rustc_invocation(manifest_path: &str) -> Result<RustcInvocation> {
     // Run cargo build with build-plan
     let output = Command::new("cargo")
         .args([
@@ -142,7 +142,7 @@ fn get_rustc_invocation(manifest_path: &str) -> Result<Invocation> {
         .collect::<Result<Vec<_>>>()?;
 
     anyhow::ensure!(
-        program.ends_with("rustc") && raw_args.first().map_or(false, |arg| arg == "--crate-name"),
+        program.ends_with("rustc") && raw_args.first().is_some_and(|arg| arg == "--crate-name"),
         "Invoked program is not `rustc`, or the first argument is not '--crate-name'"
     );
 
@@ -164,8 +164,7 @@ fn get_rustc_invocation(manifest_path: &str) -> Result<Invocation> {
         i += 1;
     }
 
-    Ok(Invocation {
-        program,
+    Ok(RustcInvocation {
         args: processed_args,
     })
 }

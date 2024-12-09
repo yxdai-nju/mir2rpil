@@ -9,6 +9,7 @@ use std::fmt;
 pub struct ExecutionPath {
     call_stack: Vec<DefId>,
     bb_trace: Vec<(DefId, usize)>,
+    visited_functions: FxHashSet<DefId>,
     visited_bbs: FxHashSet<(DefId, usize)>,
 }
 
@@ -17,6 +18,7 @@ impl ExecutionPath {
         Self {
             call_stack: vec![],
             bb_trace: vec![],
+            visited_functions: FxHashSet::default(),
             visited_bbs: FxHashSet::default(),
         }
     }
@@ -31,19 +33,19 @@ impl ExecutionPath {
         *self.call_stack.last().unwrap()
     }
 
-    #[inline(always)]
     pub fn push_function(&mut self, func_def_id: DefId) {
         self.call_stack.push(func_def_id);
+        self.visited_functions.insert(func_def_id);
     }
 
-    #[inline(always)]
     pub fn pop_function(&mut self) {
-        self.call_stack.pop();
+        let func_def_id = self.call_stack.pop().unwrap();
+        self.visited_functions.remove(&func_def_id);
     }
 
     pub fn is_basic_block_visited(&self, bb: mir::BasicBlock) -> bool {
         let waypoint = (self.stack_top_func_def_id(), bb.as_usize());
-        self.visited_bbs.contains(&waypoint)
+        self.visited_functions.contains(&waypoint.0) || self.visited_bbs.contains(&waypoint)
     }
 
     pub fn push_basic_block(&mut self, bb: mir::BasicBlock) {
