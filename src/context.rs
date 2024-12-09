@@ -89,6 +89,11 @@ impl TranslationCtxt {
     }
 
     #[inline(always)]
+    pub fn is_revisiting_visited_function(&self) -> bool {
+        self.execution_path.is_revisiting_visited_function()
+    }
+
+    #[inline(always)]
     pub fn is_basic_block_visited(&self, bb: mir::BasicBlock) -> bool {
         self.execution_path.is_basic_block_visited(bb)
     }
@@ -215,7 +220,14 @@ impl TranslationCtxt {
                 base: Box::new(self.reduced_rpil_op(base)),
                 place_desc: place_desc.clone(),
             },
-            LowRpilOp::Ref(inner_op) => LowRpilOp::Ref(Box::new(self.reduced_rpil_op(inner_op))),
+            LowRpilOp::Ref(inner_op) => {
+                let reduced_inner_op = self.reduced_rpil_op(inner_op);
+                // Turn `Ref(Deref(op))` into `op` when possible
+                match reduced_inner_op {
+                    LowRpilOp::Deref(referenced_op) => *referenced_op.clone(),
+                    _ => LowRpilOp::Ref(Box::new(reduced_inner_op)),
+                }
+            }
             LowRpilOp::Deref(inner_op) => {
                 let reduced_inner_op = self.reduced_rpil_op(inner_op);
                 // Turn `Deref(Ref(op))` into `op` when possible
@@ -245,6 +257,7 @@ impl TranslationCtxt {
 // RPIL conversion
 impl TranslationCtxt {
     pub fn into_rpil_insts(mut self, func_argc: usize) -> Vec<RpilInst> {
+        assert_eq!(self.execution_path.stack_depth(), 0);
         self.mapping.expand_to_transitive_closure();
         let assignments: Vec<_> = self
             .mapping

@@ -190,17 +190,22 @@ fn project_rpil_place(
     }
     let rplace = &place.projection[idx - 1];
     match rplace {
-        mir::ProjectionElem::Field(ridx, _) => {
-            let new_place_idx = ridx.as_usize();
-            let inner_projection_result = project_rpil_place(place, idx - 1, Some(new_place_idx));
-            resolve_pending_field_cast(inner_projection_result, pending_place_idx, |p| {
-                PlaceDesc::P(p)
-            })
+        mir::ProjectionElem::Field(ridx, ty) => {
+            let is_transparent = ty
+                .ty_adt_def()
+                .is_some_and(|adt_def| adt_def.repr().transparent());
+            let new_place_idx = if is_transparent {
+                None
+            } else {
+                Some(ridx.as_usize())
+            };
+            let inner_projection_result = project_rpil_place(place, idx - 1, new_place_idx);
+            resolve_pending_field_cast(inner_projection_result, pending_place_idx, PlaceDesc::P)
         }
         mir::ProjectionElem::Downcast(_, variant_idx) => {
             let inner_projection_result = project_rpil_place(place, idx - 1, None);
-            resolve_pending_field_cast(inner_projection_result, pending_place_idx, |p| {
-                PlaceDesc::VP(variant_idx.as_usize(), p)
+            resolve_pending_field_cast(inner_projection_result, pending_place_idx, |place_idx| {
+                PlaceDesc::VP(variant_idx.as_usize(), place_idx)
             })
         }
         mir::ProjectionElem::Deref => {
@@ -208,7 +213,7 @@ fn project_rpil_place(
             LowRpilOp::Deref(Box::new(resolve_pending_field_cast(
                 inner_projection_result,
                 pending_place_idx,
-                |p| PlaceDesc::P(p),
+                PlaceDesc::P,
             )))
         }
         _ => {
@@ -225,12 +230,12 @@ fn project_rpil_place(
 fn resolve_pending_field_cast(
     inner_projection_result: LowRpilOp,
     pending_place_idx: Option<usize>,
-    mut f: impl FnMut(usize) -> PlaceDesc,
+    place_descriptor_f: impl FnOnce(usize) -> PlaceDesc,
 ) -> LowRpilOp {
     if let Some(place_idx) = pending_place_idx {
         LowRpilOp::Place {
             base: Box::new(inner_projection_result),
-            place_desc: f(place_idx),
+            place_desc: place_descriptor_f(place_idx),
         }
     } else {
         inner_projection_result
@@ -243,7 +248,10 @@ impl RpilOp {
             LowRpilOp::Local { .. } | LowRpilOp::Closure { .. } => {
                 unreachable!()
             }
-            LowRpilOp::UpLocal { index, .. } => RpilOp::Local { index },
+            LowRpilOp::UpLocal { index, depth } => {
+                assert_eq!(depth, 1);
+                RpilOp::Local { index }
+            }
             LowRpilOp::Place { base, place_desc } => RpilOp::Place {
                 base: Box::new(RpilOp::from_low_rpil(*base)),
                 place_desc: place_desc.clone(),

@@ -133,7 +133,11 @@ fn translate_terminator(
                     ret: LowRpilOp::from_mir_place(destination),
                     args_op: LowRpilOp::from_mir_place(closure_args_place),
                 });
-                trcx_variants = translate_function_call(tcx, trcx);
+                trcx_variants = if trcx.is_revisiting_visited_function() {
+                    vec![]
+                } else {
+                    translate_function_call(tcx, trcx)
+                }
             } else {
                 let arg_ops = arg_list
                     .iter()
@@ -150,9 +154,16 @@ fn translate_terminator(
                     ret: LowRpilOp::from_mir_place(destination),
                     arg_ops,
                 });
-                trcx_variants = translate_function_call(tcx, trcx);
+                trcx_variants = if trcx.is_revisiting_visited_function() {
+                    vec![]
+                } else {
+                    translate_function_call(tcx, trcx)
+                }
             }
-            (trcx_variants, Some(target.map_or(vec![], |bb| vec![bb])))
+            (
+                trcx_variants,
+                target.map_or(Some(vec![]), |bb| Some(vec![bb])),
+            )
         }
         mir::TerminatorKind::Goto { target }
         | mir::TerminatorKind::Assert { target, .. }
@@ -175,11 +186,12 @@ fn translate_terminator(
     }
 }
 
-fn translate_function_call(tcx: TyCtxt<'_>, trcx: TranslationCtxt) -> Vec<TranslationCtxt> {
+fn translate_function_call(tcx: TyCtxt<'_>, mut trcx: TranslationCtxt) -> Vec<TranslationCtxt> {
     let func_def_id = trcx.stack_top_function_def_id();
     debug::log_func_mir(tcx, func_def_id);
 
     if !tcx.is_mir_available(func_def_id) {
+        trcx.eval(LowRpilInst::Return);
         return vec![trcx];
     }
 
@@ -273,10 +285,7 @@ fn translate_statement_of_assign<'tcx>(
         mir::Rvalue::RawPtr(_, rplace) => {
             println!("[Rvalue] RawPtr({:?})", rplace);
             let rhs_inner = LowRpilOp::from_mir_place(rplace);
-            let rhs = match rhs_inner {
-                LowRpilOp::Deref(rhs_referree) => *rhs_referree,
-                _ => LowRpilOp::Ref(Box::new(rhs_inner)), // unimplemented!(),
-            };
+            let rhs = LowRpilOp::Ref(Box::new(rhs_inner));
             trcx.eval(LowRpilInst::Assign { lhs, rhs });
         }
         mir::Rvalue::Aggregate(aggregate, values) => {
@@ -436,7 +445,10 @@ fn handle_aggregate(
 
 fn is_function_excluded(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     let excluded_from_translation: rustc_data_structures::fx::FxHashSet<&str> =
-        ["alloc::alloc::exchange_malloc"].iter().cloned().collect();
+        ["alloc::alloc::exchange_malloc", "core::mem::swap"]
+            .iter()
+            .cloned()
+            .collect();
     let def_path = tcx.def_path_str(def_id);
     excluded_from_translation.contains(def_path.as_str())
 }

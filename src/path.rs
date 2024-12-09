@@ -43,9 +43,14 @@ impl ExecutionPath {
         self.visited_functions.remove(&func_def_id);
     }
 
+    #[inline(always)]
+    pub fn is_revisiting_visited_function(&self) -> bool {
+        self.visited_functions.len() < self.call_stack.len()
+    }
+
     pub fn is_basic_block_visited(&self, bb: mir::BasicBlock) -> bool {
         let waypoint = (self.stack_top_func_def_id(), bb.as_usize());
-        self.visited_functions.len() < self.call_stack.len() || self.visited_bbs.contains(&waypoint)
+        self.visited_bbs.contains(&waypoint)
     }
 
     pub fn push_basic_block(&mut self, bb: mir::BasicBlock) {
