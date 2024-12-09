@@ -99,7 +99,7 @@ pub enum RpilInst {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum PlaceDesc {
-    V(usize),
+    VP(usize, usize),
     P(usize),
     PExt,
 }
@@ -113,7 +113,7 @@ pub enum StatusChange {
 
 impl LowRpilOp {
     pub fn from_mir_place(place: &mir::Place<'_>) -> Self {
-        project_rpil_place(place, place.projection.len())
+        project_rpil_place(place, place.projection.len(), None)
     }
 
     pub fn with_depth(op: LowRpilOp, depth: usize) -> LowRpilOp {
@@ -170,24 +170,46 @@ impl LowRpilOp {
     }
 }
 
-fn project_rpil_place(place: &mir::Place<'_>, idx: usize) -> LowRpilOp {
+fn project_rpil_place(
+    place: &mir::Place<'_>,
+    idx: usize,
+    pending_place_idx: Option<usize>,
+) -> LowRpilOp {
     if idx == 0 {
-        return LowRpilOp::Local {
+        let inner_projection_result = LowRpilOp::Local {
             index: place.local.as_usize(),
+        };
+        return if let Some(place_idx) = pending_place_idx {
+            LowRpilOp::Place {
+                base: Box::new(inner_projection_result),
+                place_desc: PlaceDesc::P(place_idx),
+            }
+        } else {
+            inner_projection_result
         };
     }
     let rplace = &place.projection[idx - 1];
     match rplace {
-        mir::ProjectionElem::Field(ridx, _) => LowRpilOp::Place {
-            base: Box::new(project_rpil_place(place, idx - 1)),
-            place_desc: PlaceDesc::P(ridx.as_usize()),
-        },
-        mir::ProjectionElem::Downcast(_, variant_idx) => LowRpilOp::Place {
-            base: Box::new(project_rpil_place(place, idx - 1)),
-            place_desc: PlaceDesc::V(variant_idx.as_usize()),
-        },
+        mir::ProjectionElem::Field(ridx, _) => {
+            let new_place_idx = ridx.as_usize();
+            let inner_projection_result = project_rpil_place(place, idx - 1, Some(new_place_idx));
+            resolve_pending_field_cast(inner_projection_result, pending_place_idx, |p| {
+                PlaceDesc::P(p)
+            })
+        }
+        mir::ProjectionElem::Downcast(_, variant_idx) => {
+            let inner_projection_result = project_rpil_place(place, idx - 1, None);
+            resolve_pending_field_cast(inner_projection_result, pending_place_idx, |p| {
+                PlaceDesc::VP(variant_idx.as_usize(), p)
+            })
+        }
         mir::ProjectionElem::Deref => {
-            LowRpilOp::Deref(Box::new(project_rpil_place(place, idx - 1)))
+            let inner_projection_result = project_rpil_place(place, idx - 1, None);
+            LowRpilOp::Deref(Box::new(resolve_pending_field_cast(
+                inner_projection_result,
+                pending_place_idx,
+                |p| PlaceDesc::P(p),
+            )))
         }
         _ => {
             println!(
@@ -197,6 +219,21 @@ fn project_rpil_place(place: &mir::Place<'_>, idx: usize) -> LowRpilOp {
             );
             unimplemented!()
         }
+    }
+}
+
+fn resolve_pending_field_cast(
+    inner_projection_result: LowRpilOp,
+    pending_place_idx: Option<usize>,
+    mut f: impl FnMut(usize) -> PlaceDesc,
+) -> LowRpilOp {
+    if let Some(place_idx) = pending_place_idx {
+        LowRpilOp::Place {
+            base: Box::new(inner_projection_result),
+            place_desc: f(place_idx),
+        }
+    } else {
+        inner_projection_result
     }
 }
 
@@ -287,7 +324,7 @@ impl fmt::Debug for LowRpilInst {
 impl fmt::Debug for PlaceDesc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PlaceDesc::V(v) => write!(f, "v{}", v),
+            PlaceDesc::VP(v, p) => write!(f, "v{}p{}", v, p),
             PlaceDesc::P(p) => write!(f, "p{}", p),
             PlaceDesc::PExt => write!(f, "ext"),
         }

@@ -386,11 +386,7 @@ fn translate_statement_of_assign_aggregate<'tcx>(
                 for (lidx, value) in values.iter().enumerate() {
                     let lhs_place = LowRpilOp::Place {
                         base: Box::new(lhs.clone()),
-                        place_desc: PlaceDesc::V(variant_idx.as_usize()),
-                    };
-                    let lhs_place = LowRpilOp::Place {
-                        base: Box::new(lhs_place),
-                        place_desc: PlaceDesc::P(lidx),
+                        place_desc: PlaceDesc::VP(variant_idx.as_usize(), lidx),
                     };
                     trcx = handle_aggregate(trcx, lhs_place, value);
                 }

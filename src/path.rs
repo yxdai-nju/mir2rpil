@@ -45,7 +45,7 @@ impl ExecutionPath {
 
     pub fn is_basic_block_visited(&self, bb: mir::BasicBlock) -> bool {
         let waypoint = (self.stack_top_func_def_id(), bb.as_usize());
-        self.visited_functions.contains(&waypoint.0) || self.visited_bbs.contains(&waypoint)
+        self.visited_functions.len() < self.call_stack.len() || self.visited_bbs.contains(&waypoint)
     }
 
     pub fn push_basic_block(&mut self, bb: mir::BasicBlock) {
