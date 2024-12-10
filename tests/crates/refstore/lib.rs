@@ -37,9 +37,21 @@ pub fn pin_p0<'a, T>(refstore: &mut RefStore<'a, T, ()>) -> Pin<&'a mut T> {
     unsafe { Pin::new_unchecked(x) }
 }
 
-pub fn pin_union_p0<'a, T>(refstore_union: &mut RefStoreUnion<'a, T, T>) -> Pin<&'a mut T> {
+pub fn pin_p1<'a, U>(refstore: &mut RefStore<'a, (), U>) -> Pin<&'a mut U> {
+    let x = refstore.ref1.take().unwrap();
+    unsafe { Pin::new_unchecked(x) }
+}
+
+pub fn pin_union_p0<'a, T>(refstore_union: &mut RefStoreUnion<'a, T, ()>) -> Pin<&'a mut T> {
     unsafe {
-        let x = &mut *(refstore_union.ref1 as *mut T);
+        let x = &mut *(refstore_union.ref0 as *mut T);
+        Pin::new_unchecked(x)
+    }
+}
+
+pub fn pin_union_p1<'a, U>(refstore_union: &mut RefStoreUnion<'a, (), U>) -> Pin<&'a mut U> {
+    unsafe {
+        let x = &mut *(refstore_union.ref1 as *mut U);
         Pin::new_unchecked(x)
     }
 }

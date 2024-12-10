@@ -369,7 +369,8 @@ fn translate_statement_of_assign_aggregate<'tcx>(
             let def_path = tcx.def_path_str(*def_id);
             let adt_def = tcx.type_of(def_id).skip_binder().ty_adt_def().unwrap();
             let is_transparent = adt_def.repr().transparent();
-            let is_enum = adt_def.is_enum();
+            let (is_enum, is_struct, is_union) =
+                (adt_def.is_enum(), adt_def.is_struct(), adt_def.is_union());
             println!(
                 "[Aggregate] Adt(def_path={:?}, variant_idx={:?}, transparent={:?})",
                 def_path, variant_idx, is_transparent
@@ -383,8 +384,19 @@ fn translate_statement_of_assign_aggregate<'tcx>(
                     mir::Operand::Move(_) | mir::Operand::Constant(_) => unreachable!(),
                 }
             }
-            if is_transparent {
-                let lhs_place = lhs.clone();
+            // Only struct/union could be #[repr(transparent)]
+            assert!(!is_transparent || (is_struct || is_union));
+            if (is_struct && is_transparent) || is_union {
+                // Handle transparent struct and union (both transparent and non-transparent)
+                let lhs_place = if is_struct && is_transparent {
+                    assert!(field_idx.is_none());
+                    lhs.clone()
+                } else {
+                    LowRpilOp::Place {
+                        base: Box::new(lhs.clone()),
+                        place_desc: PlaceDesc::P(field_idx.unwrap().as_usize()),
+                    }
+                };
                 // Ensure that all values except the first are constant (e.g. marker::PhantomData)
                 let value = {
                     let mut result = None;
@@ -397,33 +409,24 @@ fn translate_statement_of_assign_aggregate<'tcx>(
                     }
                     result.unwrap()
                 };
+                // Only assign the first value
                 trcx = handle_aggregate(trcx, lhs_place, value);
             } else {
+                // Handle enum and non-transparent struct
+                assert!(field_idx.is_none());
                 for (lidx, value) in values.iter().enumerate() {
                     let base = Box::new(lhs.clone());
-                    let lhs_place = match (is_enum, field_idx) {
-                        // Enum
-                        (true, None) => LowRpilOp::Place {
+                    let lhs_place = if is_enum {
+                        LowRpilOp::Place {
                             base,
                             place_desc: PlaceDesc::VP(variant_idx.as_usize(), lidx),
-                        },
-                        // Struct
-                        (false, None) => {
-                            assert!(adt_def.is_struct());
-                            LowRpilOp::Place {
-                                base,
-                                place_desc: PlaceDesc::P(lidx),
-                            }
                         }
-                        // Union
-                        (false, Some(union_field_idx)) => {
-                            assert!(adt_def.is_union());
-                            LowRpilOp::Place {
-                                base,
-                                place_desc: PlaceDesc::P(union_field_idx.as_usize()),
-                            }
+                    } else {
+                        assert!(is_struct && !is_transparent);
+                        LowRpilOp::Place {
+                            base,
+                            place_desc: PlaceDesc::P(lidx),
                         }
-                        _ => unreachable!(),
                     };
                     trcx = handle_aggregate(trcx, lhs_place, value);
                 }
