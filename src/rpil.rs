@@ -191,10 +191,10 @@ fn project_rpil_place(
     let rplace = &place.projection[idx - 1];
     match rplace {
         mir::ProjectionElem::Field(ridx, ty) => {
-            let is_transparent = ty
+            let is_transparent_adt = ty
                 .ty_adt_def()
                 .is_some_and(|adt_def| adt_def.repr().transparent());
-            let new_place_idx = if is_transparent {
+            let new_place_idx = if is_transparent_adt {
                 None
             } else {
                 Some(ridx.as_usize())
@@ -209,12 +209,9 @@ fn project_rpil_place(
             })
         }
         mir::ProjectionElem::Deref => {
-            let inner_projection_result = project_rpil_place(place, idx - 1, None);
-            LowRpilOp::Deref(Box::new(resolve_pending_field_cast(
-                inner_projection_result,
-                pending_place_idx,
-                PlaceDesc::P,
-            )))
+            let inner_projection_result =
+                LowRpilOp::Deref(Box::new(project_rpil_place(place, idx - 1, None)));
+            resolve_pending_field_cast(inner_projection_result, pending_place_idx, PlaceDesc::P)
         }
         _ => {
             println!(

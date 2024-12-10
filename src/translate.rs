@@ -365,15 +365,11 @@ fn translate_statement_of_assign_aggregate<'tcx>(
                 trcx = handle_aggregate(trcx, lhs_place, value);
             }
         }
-        mir::AggregateKind::Adt(def_id, variant_idx, _, _, _) => {
+        mir::AggregateKind::Adt(def_id, variant_idx, _, _, field_idx) => {
             let def_path = tcx.def_path_str(*def_id);
-            let is_transparent = tcx
-                .type_of(def_id)
-                .skip_binder()
-                .ty_adt_def()
-                .unwrap()
-                .repr()
-                .transparent();
+            let adt_def = tcx.type_of(def_id).skip_binder().ty_adt_def().unwrap();
+            let is_transparent = adt_def.repr().transparent();
+            let is_enum = adt_def.is_enum();
             println!(
                 "[Aggregate] Adt(def_path={:?}, variant_idx={:?}, transparent={:?})",
                 def_path, variant_idx, is_transparent
@@ -389,13 +385,45 @@ fn translate_statement_of_assign_aggregate<'tcx>(
             }
             if is_transparent {
                 let lhs_place = lhs.clone();
-                let value = values.iter().next().unwrap();
+                // Ensure that all values except the first are constant (e.g. marker::PhantomData)
+                let value = {
+                    let mut result = None;
+                    for (i, v) in values.iter().enumerate() {
+                        if i == 0 {
+                            result = Some(v);
+                        } else {
+                            assert!(v.constant().is_some());
+                        }
+                    }
+                    result.unwrap()
+                };
                 trcx = handle_aggregate(trcx, lhs_place, value);
             } else {
                 for (lidx, value) in values.iter().enumerate() {
-                    let lhs_place = LowRpilOp::Place {
-                        base: Box::new(lhs.clone()),
-                        place_desc: PlaceDesc::VP(variant_idx.as_usize(), lidx),
+                    let base = Box::new(lhs.clone());
+                    let lhs_place = match (is_enum, field_idx) {
+                        // Enum
+                        (true, None) => LowRpilOp::Place {
+                            base,
+                            place_desc: PlaceDesc::VP(variant_idx.as_usize(), lidx),
+                        },
+                        // Struct
+                        (false, None) => {
+                            assert!(adt_def.is_struct());
+                            LowRpilOp::Place {
+                                base,
+                                place_desc: PlaceDesc::P(lidx),
+                            }
+                        }
+                        // Union
+                        (false, Some(union_field_idx)) => {
+                            assert!(adt_def.is_union());
+                            LowRpilOp::Place {
+                                base,
+                                place_desc: PlaceDesc::P(union_field_idx.as_usize()),
+                            }
+                        }
+                        _ => unreachable!(),
                     };
                     trcx = handle_aggregate(trcx, lhs_place, value);
                 }
