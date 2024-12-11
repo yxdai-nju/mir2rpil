@@ -60,9 +60,15 @@ impl TranslationCtxt {
                 self.insert_mapping(lhs, rhs);
                 println!("Ctxt: {:?}", self);
             }
-            LowRpilInst::Pin(local_op) => {
-                let op = self.local_rpil_op_into_reduced_op_with_depth(local_op);
+            LowRpilInst::DerefPin(local_op) => {
+                let derefed_local_op = LowRpilOp::Deref(Box::new(local_op));
+                let op = self.local_rpil_op_into_reduced_op_with_depth(derefed_local_op);
                 self.insert_status_change(op, StatusChange::Pin);
+            }
+            LowRpilInst::DerefMove(local_op) => {
+                let derefed_local_op = LowRpilOp::Deref(Box::new(local_op));
+                let op = self.local_rpil_op_into_reduced_op_with_depth(derefed_local_op);
+                self.insert_status_change(op, StatusChange::Move);
             }
             LowRpilInst::Move(local_op) => {
                 let op = self.local_rpil_op_into_reduced_op_with_depth(local_op);
@@ -81,7 +87,7 @@ impl TranslationCtxt {
             LowRpilInst::Return => {
                 let max_depth = self.execution_path.stack_depth();
                 if max_depth > 1 {
-                    self.mapping.remove_over_depth_mapping(max_depth);
+                    self.remove_over_depth_records(max_depth);
                 }
                 self.execution_path.pop_function();
             }
@@ -113,6 +119,13 @@ impl TranslationCtxt {
             .iter()
             .map(|idx| idx.to_string())
             .collect::<String>()
+    }
+
+    #[inline(always)]
+    fn remove_over_depth_records(&mut self, max_depth: usize) {
+        self.mapping.remove_over_depth_mapping(max_depth);
+        self.status_changes
+            .retain(|(op, _, _)| op.depth() < max_depth);
     }
 
     fn handle_function_call(
@@ -277,6 +290,10 @@ impl TranslationCtxt {
         let status_changes: Vec<_> = self
             .status_changes
             .into_iter()
+            .filter(|(op, _, _)| {
+                op.origin_index()
+                    .is_some_and(|op_index| op_index <= func_argc)
+            })
             .map(|(low_op, status_change, serial)| {
                 let inst = RpilInst::from_low_rpil_status_change(low_op, status_change);
                 (inst, serial)

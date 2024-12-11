@@ -66,7 +66,8 @@ pub enum LowRpilInst {
         ret: LowRpilOp,
         args_op: LowRpilOp,
     },
-    Pin(LowRpilOp),
+    DerefPin(LowRpilOp),
+    DerefMove(LowRpilOp),
     Move(LowRpilOp),
     Forget(LowRpilOp),
     EnterBasicBlock {
@@ -316,7 +317,8 @@ impl fmt::Debug for LowRpilInst {
             } => {
                 write!(f, "{:?} = Call({:?}, {:?});", ret, closure, args_op)
             }
-            LowRpilInst::Pin(op) => write!(f, "pin {:?};", op),
+            LowRpilInst::DerefPin(op) => write!(f, "pin-deref {:?};", op),
+            LowRpilInst::DerefMove(op) => write!(f, "move-deref {:?};", op),
             LowRpilInst::Move(op) => write!(f, "move {:?};", op),
             LowRpilInst::Forget(op) => write!(f, "forget {:?};", op),
             LowRpilInst::EnterBasicBlock { bb } => write!(f, "enter bb{};", bb.as_usize()),

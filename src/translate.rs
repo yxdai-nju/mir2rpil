@@ -1,7 +1,7 @@
 use rustc_data_structures::graph::StartNode;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir;
-use rustc_middle::ty::{FnDef, TyCtxt};
+use rustc_middle::ty::{FnDef, TyCtxt, TyKind};
 
 use std::mem::discriminant;
 
@@ -111,12 +111,36 @@ fn translate_terminator(
                 "[MIR Term] Assign(({:?}, {:?}{:?}))",
                 destination, func, arg_list
             );
+
             let func_def_id = get_def_id_from_fndef_operand(func);
-            // println!("Function Name: {}", tcx.def_path_str(func_def_id));
-            // println!("Function Args: {:?}", arg_list);
+            let func_name = tcx.def_path_str(func_def_id);
 
             let trcx_variants;
             if is_function_excluded(tcx, func_def_id) {
+                trcx_variants = vec![trcx];
+            } else if func_name == "std::convert::AsMut::as_mut" {
+                // Handle <std::boxed::Box<T> as std::convert::AsMut<T>>::as_mut, which has no MIR body
+                let receiver_is_box = match func.constant().unwrap().const_ {
+                    mir::Const::Val(_, t) => match t.kind() {
+                        TyKind::FnDef(_, substs) => {
+                            let receiver = substs.type_at(0);
+                            receiver.is_box()
+                        }
+                        _ => unreachable!(),
+                    },
+                    _ => unreachable!(),
+                };
+                assert!(receiver_is_box);
+                let ref_to_box = LowRpilOp::from_mir_place(&arg_list[0].place().unwrap());
+                let box_content = LowRpilOp::Place {
+                    base: Box::new(LowRpilOp::Deref(Box::new(ref_to_box))),
+                    place_desc: PlaceDesc::PExt,
+                };
+                let ref_to_box_content = LowRpilOp::Ref(Box::new(box_content));
+                trcx.eval(LowRpilInst::Assign {
+                    lhs: LowRpilOp::from_mir_place(destination),
+                    rhs: ref_to_box_content,
+                });
                 trcx_variants = vec![trcx];
             } else if is_function_fn_trait_shim(tcx, func_def_id) {
                 assert_eq!(arg_list.len(), 2);
@@ -189,6 +213,14 @@ fn translate_terminator(
 fn translate_function_call(tcx: TyCtxt<'_>, mut trcx: TranslationCtxt) -> Vec<TranslationCtxt> {
     let func_def_id = trcx.stack_top_function_def_id();
     debug::log_func_mir(tcx, func_def_id);
+
+    let func_name = tcx.def_path_str(func_def_id);
+    if func_name == "core::intrinsics::typed_swap" || func_name == "std::intrinsics::typed_swap" {
+        trcx.eval(LowRpilInst::DerefMove(LowRpilOp::Local { index: 1 }));
+        trcx.eval(LowRpilInst::DerefMove(LowRpilOp::Local { index: 2 }));
+        trcx.eval(LowRpilInst::Return);
+        return vec![trcx];
+    }
 
     if !tcx.is_mir_available(func_def_id) {
         trcx.eval(LowRpilInst::Return);
@@ -322,7 +354,7 @@ fn translate_statement_of_assign<'tcx>(
                     });
                 }
                 mir::Operand::Copy(..) | mir::Operand::Constant(..) => {
-                    unimplemented!();
+                    unreachable!();
                 }
             }
         }
@@ -362,7 +394,7 @@ fn translate_statement_of_assign_aggregate<'tcx>(
                     base: Box::new(lhs.clone()),
                     place_desc: PlaceDesc::P(lidx),
                 };
-                trcx = handle_aggregate(trcx, lhs_place, value);
+                trcx = handle_aggregate(trcx, lhs_place, value, false);
             }
         }
         mir::AggregateKind::Adt(def_id, variant_idx, _, _, field_idx) => {
@@ -379,7 +411,7 @@ fn translate_statement_of_assign_aggregate<'tcx>(
                 match values.iter().next().unwrap() {
                     mir::Operand::Copy(rhs_place) => {
                         let rhs = LowRpilOp::from_mir_place(rhs_place);
-                        trcx.eval(LowRpilInst::Pin(rhs));
+                        trcx.eval(LowRpilInst::DerefPin(rhs));
                     }
                     mir::Operand::Move(_) | mir::Operand::Constant(_) => unreachable!(),
                 }
@@ -410,7 +442,7 @@ fn translate_statement_of_assign_aggregate<'tcx>(
                     result.unwrap()
                 };
                 // Only assign the first value
-                trcx = handle_aggregate(trcx, lhs_place, value);
+                trcx = handle_aggregate(trcx, lhs_place, value, adt_def.is_manually_drop());
             } else {
                 // Handle enum and non-transparent struct
                 assert!(field_idx.is_none());
@@ -428,7 +460,7 @@ fn translate_statement_of_assign_aggregate<'tcx>(
                             place_desc: PlaceDesc::P(lidx),
                         }
                     };
-                    trcx = handle_aggregate(trcx, lhs_place, value);
+                    trcx = handle_aggregate(trcx, lhs_place, value, false);
                 }
             }
         }
@@ -445,7 +477,7 @@ fn translate_statement_of_assign_aggregate<'tcx>(
                     base: Box::new(lhs.clone()),
                     place_desc: PlaceDesc::P(lidx),
                 };
-                trcx = handle_aggregate(trcx, lhs_place, value);
+                trcx = handle_aggregate(trcx, lhs_place, value, false);
             }
         }
         _ => {
@@ -462,10 +494,14 @@ fn handle_aggregate(
     mut trcx: TranslationCtxt,
     lhs: LowRpilOp,
     value: &mir::Operand<'_>,
+    is_manually_drop: bool,
 ) -> TranslationCtxt {
     match value {
         mir::Operand::Copy(rplace) | mir::Operand::Move(rplace) => {
             let rhs = LowRpilOp::from_mir_place(rplace);
+            if is_manually_drop {
+                trcx.eval(LowRpilInst::Forget(lhs.clone()));
+            }
             trcx.eval(LowRpilInst::Assign { lhs, rhs });
         }
         mir::Operand::Constant(_) => {}
@@ -476,10 +512,7 @@ fn handle_aggregate(
 
 fn is_function_excluded(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     let excluded_from_translation: rustc_data_structures::fx::FxHashSet<&str> =
-        ["alloc::alloc::exchange_malloc", "core::mem::swap"]
-            .iter()
-            .cloned()
-            .collect();
+        ["alloc::alloc::exchange_malloc"].iter().cloned().collect();
     let def_path = tcx.def_path_str(def_id);
     excluded_from_translation.contains(def_path.as_str())
 }
@@ -497,10 +530,10 @@ fn get_def_id_from_fndef_operand(func: &mir::Operand<'_>) -> DefId {
         mir::Operand::Constant(operand) => match operand.const_ {
             mir::Const::Val(_, fn_def) => match fn_def.kind() {
                 FnDef(def_id, _) => *def_id,
-                _ => unimplemented!(),
+                _ => unreachable!(),
             },
-            mir::Const::Unevaluated(_, _) | mir::Const::Ty(_, _) => unimplemented!(),
+            mir::Const::Unevaluated(_, _) | mir::Const::Ty(_, _) => unreachable!(),
         },
-        mir::Operand::Copy(_) | mir::Operand::Move(_) => unimplemented!(),
+        mir::Operand::Copy(_) | mir::Operand::Move(_) => unreachable!(),
     }
 }
