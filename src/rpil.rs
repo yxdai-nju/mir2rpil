@@ -164,6 +164,7 @@ impl LowRpilOp {
                 }
             }
         }
+        assert!(pending_downcast.is_none());
         op
     }
 

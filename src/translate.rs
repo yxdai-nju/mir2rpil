@@ -139,14 +139,13 @@ fn translate_terminator<'tcx>(
                 };
                 assert!(receiver_is_box);
                 let ref_to_box = place_to_lowrpil_op(tcx, func_body, &arg_list[0].place().unwrap());
-                let box_content = LowRpilOp::Place {
+                let rawptr_to_box_content = LowRpilOp::Place {
                     base: Box::new(LowRpilOp::Deref(Box::new(ref_to_box))),
-                    place_desc: PlaceDesc::PExt,
+                    place_desc: PlaceDesc::P(0),
                 };
-                let ref_to_box_content = LowRpilOp::Ref(Box::new(box_content));
                 trcx.eval(LowRpilInst::Assign {
                     lhs: place_to_lowrpil_op(tcx, func_body, destination),
-                    rhs: ref_to_box_content,
+                    rhs: rawptr_to_box_content,
                 });
                 trcx_variants = vec![trcx];
             } else if is_function_fn_trait_shim(tcx, func_def_id) {
