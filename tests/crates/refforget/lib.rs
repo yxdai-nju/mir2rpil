@@ -37,3 +37,7 @@ impl<T> PinCell<T> {
 pub fn forget_on_creation() -> ManuallyDrop<Unmovable> {
     ManuallyDrop::new(Unmovable::new())
 }
+
+pub fn just_forget<T>(arg1: T) {
+    core::mem::forget(arg1);
+}

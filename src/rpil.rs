@@ -113,8 +113,58 @@ pub enum StatusChange {
 }
 
 impl LowRpilOp {
-    pub fn from_mir_place(place: &mir::Place<'_>) -> Self {
-        project_rpil_place(place, place.projection.len(), None)
+    pub fn from_mir_place(place: &mir::Place<'_>, innermost_is_transparent: bool) -> Self {
+        let mut op = LowRpilOp::Local {
+            index: place.local.as_usize(),
+        };
+        let mut is_op_transparent = innermost_is_transparent;
+        let mut pending_downcast: Option<usize> = None;
+        for projection_elem in place.projection {
+            match projection_elem {
+                mir::ProjectionElem::Field(field_idx, ty) => {
+                    let field_idx = field_idx.as_usize();
+                    let is_projection_transparent = ty
+                        .ty_adt_def()
+                        .is_some_and(|adt_def| adt_def.repr().transparent());
+                    if is_op_transparent {
+                        assert!(pending_downcast.is_none());
+                        assert_eq!(field_idx, 0);
+                        is_op_transparent = is_projection_transparent;
+                        continue;
+                    }
+                    is_op_transparent = is_projection_transparent;
+                    if let Some(variant_idx) = pending_downcast.take() {
+                        op = LowRpilOp::Place {
+                            base: Box::new(op),
+                            place_desc: PlaceDesc::VP(variant_idx, field_idx),
+                        }
+                    } else {
+                        op = LowRpilOp::Place {
+                            base: Box::new(op),
+                            place_desc: PlaceDesc::P(field_idx),
+                        }
+                    }
+                }
+                mir::ProjectionElem::Downcast(_, variant_idx) => {
+                    let variant_idx = variant_idx.as_usize();
+                    assert!(pending_downcast.is_none());
+                    let _ = pending_downcast.insert(variant_idx);
+                }
+                mir::ProjectionElem::Deref => {
+                    assert!(pending_downcast.is_none());
+                    op = LowRpilOp::Deref(Box::new(op));
+                }
+                _ => {
+                    println!(
+                        "[ProjectionElem-{:?}] Unknown `{:?}`",
+                        discriminant(&projection_elem),
+                        projection_elem
+                    );
+                    unimplemented!();
+                }
+            }
+        }
+        op
     }
 
     pub fn with_depth(op: LowRpilOp, depth: usize) -> LowRpilOp {
@@ -168,75 +218,6 @@ impl LowRpilOp {
             LowRpilOp::Place { base, .. } => base.origin_index(),
             LowRpilOp::Ref(op) | LowRpilOp::Deref(op) => op.origin_index(),
         }
-    }
-}
-
-fn project_rpil_place(
-    place: &mir::Place<'_>,
-    idx: usize,
-    pending_place_idx: Option<usize>,
-) -> LowRpilOp {
-    if idx == 0 {
-        let inner_projection_result = LowRpilOp::Local {
-            index: place.local.as_usize(),
-        };
-        return if let Some(place_idx) = pending_place_idx {
-            LowRpilOp::Place {
-                base: Box::new(inner_projection_result),
-                place_desc: PlaceDesc::P(place_idx),
-            }
-        } else {
-            inner_projection_result
-        };
-    }
-    let rplace = &place.projection[idx - 1];
-    match rplace {
-        mir::ProjectionElem::Field(ridx, ty) => {
-            let is_transparent_adt = ty
-                .ty_adt_def()
-                .is_some_and(|adt_def| adt_def.repr().transparent());
-            let new_place_idx = if is_transparent_adt {
-                None
-            } else {
-                Some(ridx.as_usize())
-            };
-            let inner_projection_result = project_rpil_place(place, idx - 1, new_place_idx);
-            resolve_pending_field_cast(inner_projection_result, pending_place_idx, PlaceDesc::P)
-        }
-        mir::ProjectionElem::Downcast(_, variant_idx) => {
-            let inner_projection_result = project_rpil_place(place, idx - 1, None);
-            resolve_pending_field_cast(inner_projection_result, pending_place_idx, |place_idx| {
-                PlaceDesc::VP(variant_idx.as_usize(), place_idx)
-            })
-        }
-        mir::ProjectionElem::Deref => {
-            let inner_projection_result =
-                LowRpilOp::Deref(Box::new(project_rpil_place(place, idx - 1, None)));
-            resolve_pending_field_cast(inner_projection_result, pending_place_idx, PlaceDesc::P)
-        }
-        _ => {
-            println!(
-                "[ProjectionElem-{:?}] Unknown `{:?}`",
-                discriminant(rplace),
-                rplace
-            );
-            unimplemented!()
-        }
-    }
-}
-
-fn resolve_pending_field_cast(
-    inner_projection_result: LowRpilOp,
-    pending_place_idx: Option<usize>,
-    place_descriptor_f: impl FnOnce(usize) -> PlaceDesc,
-) -> LowRpilOp {
-    if let Some(place_idx) = pending_place_idx {
-        LowRpilOp::Place {
-            base: Box::new(inner_projection_result),
-            place_desc: place_descriptor_f(place_idx),
-        }
-    } else {
-        inner_projection_result
     }
 }
 

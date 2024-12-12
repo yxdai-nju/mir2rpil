@@ -10,6 +10,10 @@ pub fn pin_box_content<T>(arg1: &mut Box<T>) -> Pin<&mut T> {
     unsafe { Pin::new_unchecked(arg1.as_mut()) }
 }
 
+pub fn unbox<T>(arg1: Box<T>) -> T {
+    *arg1
+}
+
 pub fn box_forget<T>(arg1: Box<T>) -> *mut T {
     Box::leak(arg1)
 }
