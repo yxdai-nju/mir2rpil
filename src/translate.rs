@@ -1,7 +1,7 @@
 use rustc_data_structures::graph::StartNode;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir;
-use rustc_middle::ty::{FnDef, TyCtxt, TyKind};
+use rustc_middle::ty::{Instance, TyCtxt, TyKind};
 
 use std::mem::discriminant;
 
@@ -101,7 +101,7 @@ fn translate_terminator<'tcx>(
     let terminator = &terminator.kind;
     match terminator {
         mir::TerminatorKind::Call {
-            func,
+            func: func_operand,
             args,
             destination,
             target,
@@ -110,10 +110,10 @@ fn translate_terminator<'tcx>(
             let arg_list: Vec<_> = args.iter().map(|s| s.node.clone()).collect();
             println!(
                 "[MIR Term] Assign(({:?}, {:?}{:?}))",
-                destination, func, arg_list
+                destination, func_operand, arg_list
             );
 
-            let func_def_id = get_def_id_from_fndef_operand(func);
+            let func_def_id = get_func_def_id(func_operand);
             let func_name = tcx.def_path_str(func_def_id);
 
             let trcx_variants;
@@ -127,7 +127,7 @@ fn translate_terminator<'tcx>(
             } else if func_name == "std::convert::AsMut::as_mut" {
                 // Handle <std::boxed::Box<T> as std::convert::AsMut<T>>::as_mut, which has no MIR body
                 assert!(arg_list.len() == 1);
-                let receiver_is_box = match func.constant().unwrap().const_ {
+                let receiver_is_box = match func_operand.constant().unwrap().const_ {
                     mir::Const::Val(_, t) => match t.kind() {
                         TyKind::FnDef(_, substs) => {
                             let receiver = substs.type_at(0);
@@ -171,7 +171,7 @@ fn translate_terminator<'tcx>(
             } else {
                 let arg_ops = arg_list
                     .iter()
-                    .filter_map(|arg_operand| match arg_operand {
+                    .map(|arg_operand| match arg_operand {
                         mir::Operand::Copy(arg_place) | mir::Operand::Move(arg_place) => {
                             let arg_op = place_to_lowrpil_op(tcx, func_body, arg_place);
                             Some(arg_op)
@@ -552,11 +552,11 @@ fn is_function_fn_trait_shim(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
             || def_path.contains("std::ops::FnOnce"))
 }
 
-fn get_def_id_from_fndef_operand(func: &mir::Operand<'_>) -> DefId {
-    match func {
+fn get_func_def_id(func_operand: &mir::Operand<'_>) -> DefId {
+    match func_operand {
         mir::Operand::Constant(operand) => match operand.const_ {
             mir::Const::Val(_, fn_def) => match fn_def.kind() {
-                FnDef(def_id, _) => *def_id,
+                rustc_middle::ty::FnDef(def_id, _) => *def_id,
                 _ => unreachable!(),
             },
             mir::Const::Unevaluated(_, _) | mir::Const::Ty(_, _) => unreachable!(),

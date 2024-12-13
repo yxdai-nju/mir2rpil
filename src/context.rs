@@ -132,7 +132,7 @@ impl TranslationCtxt {
         &mut self,
         func_def_id: DefId,
         ret_local_op: LowRpilOp,
-        arg_ops: Vec<LowRpilOp>,
+        arg_ops: Vec<Option<LowRpilOp>>,
     ) {
         let depth = self.execution_path.stack_depth();
 
@@ -145,7 +145,11 @@ impl TranslationCtxt {
         self.insert_mapping(sub_ret_op, ret_op);
 
         // Insert mappings for argument places
-        for (idx, arg_local_op) in arg_ops.into_iter().enumerate() {
+        for (idx, arg_op) in arg_ops.into_iter().enumerate() {
+            let arg_local_op = match arg_op {
+                Some(arg_local_op) => arg_local_op,
+                None => continue, // Skip const arg_op
+            };
             let sub_arg_op = LowRpilOp::UpLocal {
                 depth: depth + 1,
                 index: idx + 1,

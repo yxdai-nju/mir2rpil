@@ -21,7 +21,7 @@ impl rustc_driver::Callbacks for Mir2rpilCompilerCalls {
     #[allow(clippy::needless_lifetimes)]
     fn after_analysis<'tcx>(
         &mut self,
-        _: &rustc_interface::interface::Compiler,
+        _compiler: &rustc_interface::interface::Compiler,
         tcx: rustc_middle::ty::TyCtxt<'tcx>,
     ) -> Compilation {
         mir2rpil::debug::prepare_func_mir_log_dir();

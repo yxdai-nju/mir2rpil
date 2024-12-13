@@ -59,7 +59,7 @@ pub enum LowRpilInst {
     CallFunc {
         def_id: DefId,
         ret: LowRpilOp,
-        arg_ops: Vec<LowRpilOp>,
+        arg_ops: Vec<Option<LowRpilOp>>,
     },
     CallClosure {
         closure: LowRpilOp,
